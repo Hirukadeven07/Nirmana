@@ -68,7 +68,7 @@ export function TourViewer({ model }: { model: TourModel }) {
     const built = buildScene(model)
     scene.add(built.root)
     setStats(built.stats)
-    setRooms(built.levels.map((l) => l.rooms.filter((r) => r.kind !== 'stair')))
+    setRooms(built.levels.map((l) => l.rooms.filter((r, i, all) => r.kind !== 'stair' && r.kind !== 'void' && all.findIndex((o) => o.label === r.label) === i)))
     scene.fog = new THREE.Fog('#cfe3f3', built.size * 3, built.size * 9)
 
     const size = built.size
@@ -134,12 +134,22 @@ export function TourViewer({ model }: { model: TourModel }) {
         w.level = t > 0.5 ? s.level + 1 : s.level
       } else w.elev = built.levels[w.level].base
     }
+    /** The smallest room containing a point, so an atrium wins over the concourse around it. */
+    const roomInfoAt = (x: number, y: number, level: number) => {
+      const L = built.levels[level]
+      let best: RoomInfo | undefined
+      for (const r of L.rooms) {
+        if (r.label === L.fill || x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue
+        if (!best || r.w * r.h < best.w * best.h) best = r
+      }
+      return best
+    }
     const roomAt = (x: number, y: number, level: number) => {
       const L = built.levels[level]
-      const r = L.rooms.find((r) => r.label !== L.fill && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+      const r = roomInfoAt(x, y, level)
       if (r) return r.label
       if (x >= 0 && y >= 0 && x <= model.width && y <= model.depth) return L.fill ?? (model.style === 'house' ? 'Garden court' : 'Outside')
-      return model.style === 'house' ? 'Garden' : model.style === 'warehouse' ? 'Yard' : 'Outside'
+      return { house: 'Garden', warehouse: 'Yard', retail: 'Car park', office: 'Outside' }[model.style]
     }
     const walkQuat = (yaw = w.yaw, pitch = w.pitch) => new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'))
 
@@ -257,9 +267,9 @@ export function TourViewer({ model }: { model: TourModel }) {
     const onMini = (e: MouseEvent) => {
       const r = mini.getBoundingClientRect()
       const x = (e.clientX - r.left - mm.ox) / mm.s, y = (e.clientY - r.top - mm.oy) / mm.s
-      const L = built.levels[w.level]
-      const room = L.rooms.find((rm) => x > rm.x && x < rm.x + rm.w && y > rm.y && y < rm.y + rm.h && rm.label !== L.fill && rm.kind !== 'stair')
-      if (!blocked(x, y, w.level) && (room || w.level === 0)) { w.x = x; w.y = y; settle() }
+      const found = roomInfoAt(x, y, w.level)
+      const room = found && found.kind !== 'stair' && found.kind !== 'void' ? found : undefined
+      if (!blocked(x, y, w.level) && (room || w.level === 0) && found?.kind !== 'void') { w.x = x; w.y = y; settle() }
       else if (room) goTo(room)
     }
     mini.addEventListener('click', onMini)
@@ -279,7 +289,7 @@ export function TourViewer({ model }: { model: TourModel }) {
       const L = built.levels[w.level]
       for (const r of L.rooms) {
         const fill = r.label === L.fill
-        g.fillStyle = fill ? 'rgba(255,255,255,0.10)' : r.kind === 'dashed' ? 'rgba(255,255,255,0.06)' : r.kind === 'stair' ? 'rgba(245,165,36,0.25)' : 'rgba(255,255,255,0.16)'
+        g.fillStyle = fill ? 'rgba(255,255,255,0.10)' : r.kind === 'void' ? 'rgba(2,6,23,0.85)' : r.kind === 'dashed' || r.kind === 'open' ? 'rgba(255,255,255,0.06)' : r.kind === 'stair' ? 'rgba(245,165,36,0.25)' : 'rgba(255,255,255,0.16)'
         g.strokeStyle = 'rgba(255,255,255,0.7)'
         g.lineWidth = fill ? 1.5 : 1
         g.setLineDash(r.kind === 'dashed' ? [3, 2] : [])

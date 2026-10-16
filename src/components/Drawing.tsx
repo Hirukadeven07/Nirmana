@@ -1,10 +1,13 @@
-import { RES_FF, RES_GF, type Room } from '../data/floorplans'
-import type { PlanSheet } from '../data/types'
+import { RES_FF, RES_GF, bespokeLayout, type Layout, type Room } from '../data/floorplans'
+import type { PlanSheet, Project } from '../data/types'
 
 const INK = '#1e293b'
 const FAINT = '#94a3b8'
 const W = 800
 const H = 540
+
+/** Label font size that fits a room width, capped at the normal 11px. */
+const fitText = (label: string, width: number) => Math.min(11, (width - 8) / (label.length * 0.6))
 
 function RoomPlan({ rooms, scale, ox, oy, symbols }: { rooms: Room[]; scale: number; ox: number; oy: number; symbols?: boolean }) {
   return (
@@ -13,12 +16,13 @@ function RoomPlan({ rooms, scale, ox, oy, symbols }: { rooms: Room[]; scale: num
         const X = ox + x * scale, Y = oy + y * scale, RW = w * scale, RH = h * scale
         return (
           <g key={i}>
-            <rect x={X} y={Y} width={RW} height={RH} fill={kind === 'wet' ? '#f0f7ff' : '#fff'} stroke={INK} strokeWidth={kind === 'dashed' ? 1.2 : 4} strokeDasharray={kind === 'dashed' ? '6 4' : undefined} />
+            <rect x={X} y={Y} width={RW} height={RH} fill={kind === 'wet' ? '#f0f7ff' : kind === 'glass' ? '#f5f9ff' : kind === 'void' ? '#f1f5f9' : '#fff'} stroke={kind === 'glass' ? '#2563eb' : INK} strokeWidth={kind === 'dashed' || kind === 'open' ? 1.2 : kind === 'glass' || kind === 'void' ? 2 : 4} strokeDasharray={kind === 'dashed' || kind === 'void' ? '6 4' : kind === 'open' ? '2 4' : undefined} />
+            {kind === 'void' && <path d={`M${X} ${Y} L${X + RW} ${Y + RH} M${X + RW} ${Y} L${X} ${Y + RH}`} stroke={FAINT} strokeWidth={1} />}
             {kind === 'stair' && Array.from({ length: 9 }, (_, s) => <line key={s} x1={X + 4} x2={X + RW - 4} y1={Y + 8 + s * (RH - 16) / 8} y2={Y + 8 + s * (RH - 16) / 8} stroke={FAINT} strokeWidth={1} />)}
             {kind === 'stair' && <path d={`M${X + RW / 2} ${Y + RH - 8} L${X + RW / 2} ${Y + 12} m-5 7 l5 -7 l5 7`} fill="none" stroke={INK} strokeWidth={1.2} />}
-            {kind !== 'stair' && (
+            {kind !== 'stair' && fitText(label, RW) >= 7 && (
               <>
-                <text x={X + RW / 2} y={Y + RH / 2 - 2} textAnchor="middle" fontSize={11} fontWeight={600} fill={INK} fontFamily="Inter">{label}</text>
+                <text x={X + RW / 2} y={Y + RH / 2 - 2} textAnchor="middle" fontSize={fitText(label, RW)} fontWeight={600} fill={INK} fontFamily="Inter">{label}</text>
                 <text x={X + RW / 2} y={Y + RH / 2 + 12} textAnchor="middle" fontSize={9} fill="#64748b" fontFamily="JetBrains Mono">{w}'×{h}'</text>
               </>
             )}
@@ -225,7 +229,32 @@ function Warehouse({ elevation }: { elevation?: boolean }) {
   )
 }
 
-export function Drawing({ kind }: { kind: PlanSheet['drawing'] }) {
+/** Floor plan of one level of a project's own layout, scaled to fit the sheet. */
+function LevelPlan({ layout, level, symbols }: { layout: Layout; level: number; symbols?: boolean }) {
+  const lv = layout.levels[Math.min(level, layout.levels.length - 1)]
+  const s = Math.min((W - 220) / layout.width, (H - 140) / layout.depth)
+  const ox = (W - layout.width * s) / 2, oy = 54 + (H - 140 - layout.depth * s) / 2
+  const ft = (n: number) => `${n}'-0"`
+  return (
+    <>
+      <RoomPlan rooms={lv.rooms} scale={s} ox={ox} oy={oy} symbols={symbols} />
+      {(lv.objects ?? []).filter((o) => o.kind !== 'tree' && o.kind !== 'pool').map((o, i) => (
+        <rect key={i} x={ox + o.x * s} y={oy + o.y * s} width={o.w * s} height={o.d * s} fill={o.kind === 'plant' ? '#dcfce7' : 'none'} stroke={o.kind === 'plant' ? '#86efac' : FAINT} />
+      ))}
+      <Dim x1={ox} y1={oy - 22} x2={ox + layout.width * s} y2={oy - 22} label={ft(layout.width)} />
+      <Dim x1={ox - 26} y1={oy} x2={ox - 26} y2={oy + layout.depth * s} label={ft(layout.depth)} vertical />
+      <North x={W - 60} y={70} />
+      <text x={W / 2} y={H - 22} textAnchor="middle" fontSize={12} fontWeight={700} fill={INK} fontFamily="Inter">{lv.name.toUpperCase()} PLAN — 1:100</text>
+    </>
+  )
+}
+
+/** Which level of a layout a floor-plan sheet shows. */
+const SHEET_LEVEL: Partial<Record<PlanSheet['drawing'], number>> = { 'res-gf': 0, 'res-ff': 1, 'res-elec': 0, 'com-typ': 0, 'wh-plan': 0 }
+
+export function Drawing({ kind, project }: { kind: PlanSheet['drawing']; project?: Pick<Project, 'id'> }) {
+  // Projects with their own layout draw it, so the sheet matches the 3D tour.
+  const layout = project && SHEET_LEVEL[kind] !== undefined ? bespokeLayout(project) : null
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="block h-full w-full" role="img" aria-label="Drawing">
       <defs>
@@ -234,16 +263,17 @@ export function Drawing({ kind }: { kind: PlanSheet['drawing'] }) {
       </defs>
       <rect width={W} height={H} fill="#fcfcfd" />
       <rect width={W} height={H} fill="url(#paper-grid)" />
-      {kind === 'res-gf' && <ResPlan />}
-      {kind === 'res-ff' && <ResPlan upper />}
-      {kind === 'res-elec' && <ResPlan symbols />}
+      {layout && <LevelPlan layout={layout} level={SHEET_LEVEL[kind]!} symbols={kind === 'res-elec'} />}
+      {!layout && kind === 'res-gf' && <ResPlan />}
+      {!layout && kind === 'res-ff' && <ResPlan upper />}
+      {!layout && kind === 'res-elec' && <ResPlan symbols />}
       {kind === 'res-elev' && <ResElevation />}
       {kind === 'res-found' && <Foundation />}
       {kind === 'res-roof' && <Roof />}
-      {kind === 'com-typ' && <ComTypical />}
+      {!layout && kind === 'com-typ' && <ComTypical />}
       {kind === 'com-elev' && <ComElevation />}
       {kind === 'com-site' && <SitePlan />}
-      {kind === 'wh-plan' && <Warehouse />}
+      {!layout && kind === 'wh-plan' && <Warehouse />}
       {kind === 'wh-elev' && <Warehouse elevation />}
     </svg>
   )

@@ -84,6 +84,7 @@ export function makeKit() {
     redLight: memo('redl', () => new THREE.MeshStandardMaterial({ color: '#7f1d1d', emissive: '#dc2626', emissiveIntensity: 0.6 })),
     leaf: (c: string) => memo(`leaf${c}`, () => new THREE.MeshStandardMaterial({ color: c, roughness: 0.75, flatShading: true })),
     rug: memo('rug', () => new THREE.MeshStandardMaterial({ map: rugTex, roughness: 1 })),
+    water: memo('water', () => new THREE.MeshPhysicalMaterial({ color: '#2aa7c9', roughness: 0.04, metalness: 0.1, clearcoat: 1, transparent: true, opacity: 0.88 })),
   }
 
   const geos = new Map<string, THREE.BufferGeometry>()
@@ -466,9 +467,9 @@ export function bookshelf(k: Kit, w: number): G {
   return g
 }
 
-export function car(k: Kit): G {
+export function car(k: Kit, color = '#9f1239'): G {
   const g = group(), { m } = k
-  const paint = m.carPaint('#9f1239')
+  const paint = m.carPaint(color)
   // lower body, with a sloping bonnet and boot
   k.rbox(g, 0, 0.7, 0.3, 6, 1.25, 13, paint, 0.45)
   const bonnet = k.rbox(g, 0.1, 1.55, 0.6, 5.8, 0.7, 3.6, paint, 0.3)
@@ -494,6 +495,18 @@ export function car(k: Kit): G {
   }
   k.rbox(g, 1.6, 1.0, 0.1, 2.8, 0.5, 0.15, m.blackGlass, 0.05)
   for (const x of [-0.35, 5.95]) k.rbox(g, x, 2.6, 4.2, 0.4, 0.3, 0.55, paint, 0.1)
+  return g
+}
+
+/** Treadmill, 2.8 ft wide and 6 ft long, console against the wall. */
+export function treadmill(k: Kit): G {
+  const g = group(), { m } = k
+  k.rbox(g, 0, 0, 0.6, 2.8, 0.55, 5.3, m.paint('#1f2937', 0.5), 0.1)
+  k.box(g, 0.35, 0.55, 1.1, 2.1, 0.04, 4.5, m.rubber)
+  for (const x of [0.15, 2.45]) k.rbox(g, x, 0.55, 0.55, 0.2, 3.7, 0.25, m.metal('#9ca3af', 0.3), 0.05)
+  k.rbox(g, 0.1, 4.1, 0.25, 2.6, 0.55, 0.8, m.blackGlass, 0.08)
+  k.box(g, 0.6, 4.3, 1.06, 1.6, 0.3, 0.005, m.screen)
+  for (const x of [0.15, 2.45]) k.rbox(g, x, 3.4, 0.6, 0.2, 0.15, 1.6, m.rubber, 0.05)
   return g
 }
 

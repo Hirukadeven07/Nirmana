@@ -425,8 +425,8 @@ function seedProject(seed: Seed): Project {
   }
 }
 
-const RES_PLANS = (date: string, pending: number): Seed['plans'] => {
-  const all: Seed['plans'] = [
+const RES_PLANS = (date: string, pending: number, floors = 2): Seed['plans'] => {
+  let all: Seed['plans'] = [
     { code: 'A-101', title: 'Ground Floor Plan', discipline: 'Architectural', rev: 'C', date: addDays(date, 0), status: 'Approved', drawing: 'res-gf', notes: 'Pantry opened to dining; store moved under stair' },
     { code: 'A-102', title: 'Upper Floor Plan', discipline: 'Architectural', rev: 'B', date: addDays(date, 6), status: 'Approved', drawing: 'res-ff', notes: 'Balcony extended by 600mm' },
     { code: 'A-201', title: 'Front & Side Elevations', discipline: 'Architectural', rev: 'B', date: addDays(date, 10), status: 'Approved', drawing: 'res-elev', notes: 'Window heads aligned; parapet height 900mm' },
@@ -434,6 +434,8 @@ const RES_PLANS = (date: string, pending: number): Seed['plans'] => {
     { code: 'A-103', title: 'Roof Plan', discipline: 'Architectural', rev: 'D', date: addDays(date, 40), status: 'Approved', drawing: 'res-roof', notes: 'Roof pitch changed to 25° for better monsoon drainage' },
     { code: 'E-101', title: 'Electrical Layout — Ground Floor', discipline: 'MEP', rev: 'A', date: addDays(date, 48), status: 'Approved', drawing: 'res-elec', notes: 'Added 15A points for inverter AC in all bedrooms' },
   ]
+  // A single-storey house has no upper floor plan.
+  if (floors < 2) all = all.filter((p) => p.drawing !== 'res-ff')
   return all.map((p, i) => (i >= all.length - pending ? { ...p, status: 'Awaiting client' as const, date: addDays(TODAY_ISO, -(all.length - i) * 2) } : p))
 }
 
@@ -518,7 +520,7 @@ const SEEDS: Seed[] = [
     contractor: { name: 'R. Sivakumar', org: 'Peninsula Builders', role: 'contractor', phone: '+94 76 221 0099', credential: 'CIDA Grade C5' },
     cover: ['#134e4a', '#2dd4bf'],
     changes: [],
-    plans: RES_PLANS('2026-09-01', 3),
+    plans: RES_PLANS('2026-09-01', 3, 1),
     messages: [{ author: 'Archt. Senthil Kumaran', role: 'architect', date: '2026-10-14', text: 'Final drawings for council approval are uploaded. Once you approve, we submit to the Pradeshiya Sabha on Monday.' }],
   },
   {

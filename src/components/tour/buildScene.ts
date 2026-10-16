@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { PlanObject, Room, RoomKind, TourLevel, TourModel } from '../../data/floorplans'
+import type { PlanObject, RoofSpec, Room, RoomKind, TourLevel, TourModel } from '../../data/floorplans'
 import * as F from './furniture'
 import { makeKit, mergeByMaterial, type Kit } from './furniture'
 
@@ -63,6 +63,7 @@ const STYLE = {
   house: { wall: '#f4efe6', floor: 'wood', exterior: '#efe6d4', trim: '#cbb994' },
   office: { wall: '#eef1f5', floor: 'carpet', exterior: '#dfe7f0', trim: '#475569' },
   warehouse: { wall: '#dfe3e8', floor: 'concrete', exterior: '#c9d1da', trim: '#64748b' },
+  retail: { wall: '#f5f3ef', floor: 'tile', exterior: '#e2e8f0', trim: '#64748b' },
 } as const
 
 // ---------------------------------------------------------------------------
@@ -232,18 +233,61 @@ export function buildScene(model: TourModel): BuiltScene {
   const stairs: Stair[] = []
   let base = model.baseElevation
 
+  // Cell grids for every level up front, so each level can see what lies above it.
+  // Rooms listed later take precedence, so a void or stair can be cut out of a larger room.
+  const grids = model.levels.map((lv) => {
+    const fillIndex = lv.fill ? lv.rooms.length : -1
+    const cells = new Int16Array(W * D).fill(fillIndex)
+    lv.rooms.forEach(([x, y, w, h], i) => {
+      for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (xx >= 0 && yy >= 0 && xx < W && yy < D) cells[yy * W + xx] = i
+    })
+    return { cells, fillIndex }
+  })
+  const kindAt = (li: number, x: number, y: number): RoomKind | 'solid' | 'out' => {
+    const g = grids[li]
+    if (!g || x < 0 || y < 0 || x >= W || y >= D) return 'out'
+    const i = g.cells[y * W + x]
+    return i < 0 ? 'out' : i === g.fillIndex ? 'solid' : model.levels[li].rooms[i][5] ?? 'solid'
+  }
+  /** Rectangles covering the cells a room actually owns, merged row by row. */
+  const owned = (li: number, idx: number, rx: number, ry: number, rw: number, rh: number) => {
+    const { cells } = grids[li]
+    const out: { x: number; y: number; w: number; h: number }[] = []
+    let prev: { a: number; b: number; rect: (typeof out)[number] }[] = []
+    const x0 = Math.max(0, rx), x1 = Math.min(W, rx + rw)
+    for (let y = Math.max(0, ry); y < Math.min(D, ry + rh); y++) {
+      const next: typeof prev = []
+      for (let x = x0; x < x1;) {
+        if (cells[y * W + x] !== idx) { x++; continue }
+        const a = x
+        while (x < x1 && cells[y * W + x] === idx) x++
+        const p = prev.find((q) => q.a === a && q.b === x)
+        if (p) { p.rect.h++; next.push(p) } else {
+          const rect = { x: a, y, w: x - a, h: 1 }
+          out.push(rect)
+          next.push({ a, b: x, rect })
+        }
+      }
+      prev = next
+    }
+    return out
+  }
+  /** Whether a floor on the level above roofs over every cell of the rectangle. */
+  const coveredAbove = (li: number, r: { x: number; y: number; w: number; h: number }) => {
+    if (!grids[li + 1]) return false
+    for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (kindAt(li + 1, x, y) === 'out') return false
+    return true
+  }
+
   model.levels.forEach((lv, li) => {
     const group = new THREE.Group()
     group.name = lv.name
     const colliders: Segment[] = []
     const rooms: Room[] = lv.rooms
-    const fillIndex = lv.fill ? rooms.length : -1
-    const cells = new Int16Array(W * D).fill(fillIndex)
-    rooms.forEach(([x, y, w, h], i) => {
-      for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (xx >= 0 && yy >= 0 && xx < W && yy < D) cells[yy * W + xx] = i
-    })
+    const { cells, fillIndex } = grids[li]
     const cell = (x: number, y: number) => (x < 0 || y < 0 || x >= W || y >= D ? -1 : cells[y * W + x])
     const kindOf = (i: number): RoomKind | 'solid' | 'out' => (i < 0 ? 'out' : i === fillIndex ? 'solid' : rooms[i][5] ?? 'solid')
+    const isEscalator = (i: number) => i >= 0 && i !== fillIndex && rooms[i][4].toLowerCase().startsWith('escalator')
     const sameStair = (lvl: TourLevel | undefined, r: Room) => !!lvl?.rooms.some((o) => o[5] === 'stair' && o[0] === r[0] && o[1] === r[1] && o[2] === r[2] && o[3] === r[3])
     const doorsBySide = new Map<number, { side: Side; a: number; b: number }[]>()
     const noteDoor = (ri: number, side: Side, a: number, b: number) => {
@@ -278,6 +322,7 @@ export function buildScene(model: TourModel): BuiltScene {
     }
 
     const fullH = lv.height
+    const glazedFacade = model.style === 'office' || model.style === 'retail'
     for (const run of runs) {
       const { vertical, line, s0, s1, a, b } = run
       const len = s1 - s0
@@ -294,6 +339,7 @@ export function buildScene(model: TourModel): BuiltScene {
       let exterior = ka === 'out' || kb === 'out'
       const centred = (w: number, top: number, bottom = 0, fill?: Opening['fill']): Opening[] =>
         len >= w + 0.6 ? [{ a: (len - w) / 2, b: (len + w) / 2, bottom, top, fill, walk: bottom === 0 && !fill }] : []
+      const openPlan = (k: string) => k === 'open' || k === 'dashed'
 
       if (openA && openB) {
         kind = li > 0 && (ka === 'out' || kb === 'out') ? 'rail' : 'none'
@@ -304,10 +350,15 @@ export function buildScene(model: TourModel): BuiltScene {
         const isLower = sameStair(model.levels[li + 1], s) || !sameStair(model.levels[li - 1], s)
         const onLow = !vertical && line === s[1] + s[3]
         const onHigh = !vertical && line === s[1]
+        // Escalators sit in open floors, so their sides are balustrades rather than walls.
+        const side = isEscalator(si) ? 'rail' : 'wall'
         if (other === 'out') kind = 'wall'
-        else if (isLower) kind = onLow ? 'none' : 'wall'
-        else kind = onHigh ? 'none' : onLow ? 'rail' : 'wall'
+        else if (other === 'stair') kind = 'wall'
+        else if (isLower) kind = onLow ? 'none' : side
+        else kind = onHigh ? 'none' : onLow ? 'rail' : side
         if (kind === 'none') noteDoor(ka === 'stair' ? b : a, ka === 'stair' ? sideB : sideA, s0, s1)
+      } else if (ka === 'void' || kb === 'void') {
+        kind = ka === kb ? 'none' : 'rail'
       } else if (ka === 'glass' || kb === 'glass') {
         if (exterior) openings = [{ a: 0, b: len, bottom: 0.4, top: height - 0.6, fill: 'glass', walk: false }]
         else {
@@ -317,9 +368,11 @@ export function buildScene(model: TourModel): BuiltScene {
         }
       } else if (ka === 'core' || kb === 'core') {
         openings = []
+      } else if (!exterior && ((ka === 'open' && openPlan(kb)) || (kb === 'open' && openPlan(ka)))) {
+        kind = 'none'
       } else if (exterior) {
         const inside = ka === 'out' ? kb : ka
-        if (model.style === 'office') openings = [{ a: 0, b: len, bottom: 0.4, top: height - 0.6, fill: 'glass', walk: false }]
+        if (glazedFacade) openings = [{ a: 0, b: len, bottom: 0.4, top: height - 0.6, fill: 'glass', walk: false }]
         else if (model.style === 'warehouse') {
           openings = len > 12 ? [{ a: len * 0.1, b: len * 0.9, bottom: height - 6, top: height - 2, fill: 'glass', walk: false }] : []
         } else if (inside === 'wet') openings = centred(2.5, 7, 5, 'glass')
@@ -327,13 +380,18 @@ export function buildScene(model: TourModel): BuiltScene {
           const n = Math.max(1, Math.round(len / 12)), seg = len / n, w = Math.min(5, seg - 2)
           openings = Array.from({ length: n }, (_, k) => ({ a: k * seg + (seg - w) / 2, b: k * seg + (seg + w) / 2, bottom: 3, top: 7, fill: 'glass' as const, walk: false }))
         }
-        // Explicit openings from the plan override the defaults on that stretch.
+        // Explicit openings from the plan replace the defaults on that stretch.
         const side: Side = vertical ? (line === 0 ? 'W' : 'E') : line === 0 ? 'N' : 'S'
         for (const o of lv.openings ?? []) {
           if (o.side !== side || o.from < s0 || o.to > s1) continue
           const oa = o.from - s0, ob = o.to - s0
-          openings = openings.filter((x) => x.b < oa - 0.5 || x.a > ob + 0.5)
-          openings.push(o.kind === 'dock' ? { a: oa, b: ob, bottom: 0, top: 14, fill: 'shutter', walk: false } : { a: oa, b: ob, bottom: 0, top: 7, walk: true })
+          openings = openings.flatMap((x) => (x.b < oa - 0.5 || x.a > ob + 0.5 ? [x] : [
+            ...(x.a < oa - 1.5 ? [{ ...x, b: oa - 0.5 }] : []),
+            ...(x.b > ob + 1.5 ? [{ ...x, a: ob + 0.5 }] : []),
+          ]))
+          openings.push(o.kind === 'dock'
+            ? { a: oa, b: ob, bottom: 0, top: Math.min(14, height - 1.5), fill: 'shutter', walk: false }
+            : { a: oa, b: ob, bottom: 0, top: Math.min(7, height - 1), walk: true })
         }
         openings.sort((x, y) => x.a - y.a)
       } else if (openA || openB) {
@@ -356,8 +414,14 @@ export function buildScene(model: TourModel): BuiltScene {
       const wallMat = exterior ? mat.exterior : mat.wall
 
       if (kind === 'rail') {
-        piece(s0, s1, 0, 3.4, wallMat, 0.4)
-        piece(s0, s1, 3.4, 3.6, mat.trim, 0.6)
+        if (glazedFacade && !exterior) {
+          // frameless glass balustrade with a steel handrail
+          piece(s0, s1, 0, 3.4, mat.glass, 0.1)
+          piece(s0, s1, 3.4, 3.6, mat.frame, 0.25)
+        } else {
+          piece(s0, s1, 0, 3.4, wallMat, 0.4)
+          piece(s0, s1, 3.4, 3.6, mat.trim, 0.6)
+        }
         seg(s0, s1)
         continue
       }
@@ -368,7 +432,7 @@ export function buildScene(model: TourModel): BuiltScene {
         if (o.top < height) piece(s0 + o.a, s0 + o.b, o.top, height, wallMat)
         if (o.fill === 'glass') {
           piece(s0 + o.a, s0 + o.b, o.bottom, o.top, mat.glass, 0.08)
-          const span = o.b - o.a, step = model.style === 'office' ? 5 : span / Math.max(1, Math.round(span / 3))
+          const span = o.b - o.a, step = glazedFacade ? 5 : span / Math.max(1, Math.round(span / 3))
           for (let m = 0; m <= span + 0.01; m += step) piece(s0 + o.a + m - 0.08, s0 + o.a + m + 0.08, o.bottom, o.top, mat.frame, 0.16)
           piece(s0 + o.a, s0 + o.b, o.bottom - 0.08, o.bottom + 0.08, mat.frame, 0.18)
           piece(s0 + o.a, s0 + o.b, o.top - 0.08, o.top + 0.08, mat.frame, 0.18)
@@ -396,8 +460,6 @@ export function buildScene(model: TourModel): BuiltScene {
     }
 
     // -- Floors, ceilings and stairs ---------------------------------------
-    const nextLevel = model.levels[li + 1]
-    const covered = (r: Room) => !!nextLevel && nextLevel.rooms.some((o) => r[0] >= o[0] && r[1] >= o[1] && r[0] + r[2] <= o[0] + o[2] && r[1] + r[3] <= o[1] + o[3] && o[5] !== 'stair')
     const roomInfos: RoomInfo[] = []
     const floorFor = (label: string, kind: RoomKind | undefined) => {
       if (kind === 'wet') return { m: mat.tile, tile: 4 }
@@ -405,46 +467,62 @@ export function buildScene(model: TourModel): BuiltScene {
       if (kind === 'core') return { m: mat.concrete, tile: 10 }
       if (model.style === 'warehouse') return label === 'Site office' ? { m: mat.carpet, tile: 6 } : { m: mat.concrete, tile: 20 }
       if (model.style === 'office') return kind === 'glass' ? { m: mat.wood, tile: 8 } : { m: mat.carpet, tile: 6 }
+      if (model.style === 'retail') return kind === 'glass' ? { m: mat.wood, tile: 8 } : { m: mat.tile, tile: 5 }
       return { m: mat.wood, tile: 8 }
     }
+    const stepMat = paint('#a3a9b1', 0.35, 0.6)
+    const seen = new Set<string>()
     const allRooms: Room[] = lv.fill ? [...lv.rooms, [0, 0, W, D, lv.fill]] : lv.rooms
     allRooms.forEach((r, ri) => {
       const [x, y, w, h, label, kind] = r
       const isFill = ri === fillIndex
-      if (kind === 'stair' && li > 0 && sameStair(model.levels[li - 1], r)) {
-        roomInfos.push({ label, x, y, w, h, kind, level: li, spot: { x: x + w / 2, y: y + h / 2 } })
-        return // stair void on the upper floor
+      const info: RoomInfo = { label, x, y, w, h, kind, level: li, spot: { x: x + w / 2, y: y + h / 2 } }
+      roomInfos.push(info)
+      if (kind === 'stair' && li > 0 && sameStair(model.levels[li - 1], r)) return // stair void on the upper floor
+      if (kind === 'void') {
+        // An atrium open to the roof gets a glazed skylight.
+        if (!model.levels[li + 1]) {
+          const top = base + lv.height
+          box(covers, x, top - 0.2, y, w, 0.12, h, mat.glass, false)
+          for (let gx = x; gx <= x + w + 0.01; gx += 5) box(covers, gx - 0.12, top - 0.35, y, 0.24, 0.35, h, mat.frame, false)
+          for (let gy = y; gy <= y + h + 0.01; gy += 6) box(covers, x, top - 0.35, gy - 0.12, w, 0.35, 0.24, mat.frame, false)
+        }
+        return
       }
       const f = floorFor(label, kind)
-      const plane = floorPlane(w, h, f.tile, f.m)
-      plane.position.set(x + w / 2, base + (isFill ? 0.01 : 0.04), y + h / 2)
-      plane.userData = { level: li, label, room: { x, y, w, h } }
-      group.add(plane)
-      floors.push(plane)
-      if (li > 0) box(group, x, base - SLAB, y, w, SLAB, h, mat.slab, false)
-      if (!isFill) stats.rooms++
-      if (kind !== 'dashed' && kind !== 'stair' && !covered(r)) {
-        const ch = lv.roomHeights?.[label] ?? lv.height
-        box(covers, x, base + ch, y, w, 0.4, h, mat.ceiling, false)
-        if (ch < lv.height) box(group, x, base + ch, y, w, 0.4, h, mat.slab, false)
+      const ch = lv.roomHeights?.[label] ?? lv.height
+      for (const o of owned(li, ri, x, y, w, h)) {
+        const plane = floorPlane(o.w, o.h, f.tile, f.m)
+        plane.position.set(o.x + o.w / 2, base + (isFill ? 0.01 : 0.04), o.y + o.h / 2)
+        plane.userData = { level: li, label, room: { x, y, w, h } }
+        group.add(plane)
+        floors.push(plane)
+        if (li > 0) box(group, o.x, base - SLAB, o.y, o.w, SLAB, o.h, mat.slab, false)
+        if (kind !== 'dashed' && kind !== 'stair' && !coveredAbove(li, o)) {
+          // Ceilings sit just under the level line so they never fight with the slab above.
+          box(covers, o.x, base + ch - 0.3, o.y, o.w, 0.3, o.h, mat.ceiling, false)
+          if (ch < lv.height) box(group, o.x, base + ch, o.y, o.w, 0.4, o.h, mat.slab, false)
+        }
       }
+      if (!isFill && !seen.has(label)) stats.rooms++
       if (kind === 'stair') {
         stairs.push({ x, y, w, h, level: li })
         const n = 16
+        const steps = isEscalator(ri) ? stepMat : mat.wood
         for (let s = 0; s < n; s++) {
           const z = y + h - ((s + 1) * h) / n
-          box(group, x + 0.3, base, z, w - 0.6, ((s + 1) * (lv.height + SLAB)) / n, h / n, mat.wood)
+          box(group, x + 0.3, base, z, w - 0.6, ((s + 1) * (lv.height + SLAB)) / n, h / n, steps)
         }
       }
-      roomInfos.push({ label, x, y, w, h, kind, level: li, spot: { x: x + w / 2, y: y + h / 2 } })
-      if (!isFill && kind !== 'stair') {
+      if (!isFill && kind !== 'stair' && !seen.has(label)) {
         const sp = labelSprite(label, `${w}'×${h}'`)
         const k = Math.max(1, Math.max(W, D) / 46)
         sp.scale.multiplyScalar(Math.min(1.6, k) * 1.5)
-        sp.position.set(x + w / 2, base + (lv.roomHeights?.[label] ?? lv.height) + 3, y + h / 2)
+        sp.position.set(x + w / 2, base + ch + 3, y + h / 2)
         sp.userData.level = li
         labels.add(sp)
       }
+      seen.add(label)
     })
 
     // -- Furniture ---------------------------------------------------------
@@ -453,9 +531,9 @@ export function buildScene(model: TourModel): BuiltScene {
     }
     const furn = new THREE.Group()
     lv.rooms.forEach((r, ri) => {
-      const { placed, focus } = furnish(kit, r, doorsBySide.get(ri) ?? [], lv.roomHeights?.[r[4]] ?? lv.height)
+      const { placed, focus } = furnish(kit, r, doorsBySide.get(ri) ?? [], lv.roomHeights?.[r[4]] ?? lv.height, model.style)
       const info = roomInfos.find((i) => i.label === r[4])
-      if (info && placed.length) info.focus = focus
+      if (info && placed.length && !info.focus) info.focus = focus
       for (const p of placed) {
         furn.add(p.obj)
         if (p.aabb) solidAabb(...p.aabb)
@@ -479,52 +557,105 @@ export function buildScene(model: TourModel): BuiltScene {
   // -- Roof --------------------------------------------------------------
   const top = levels[levels.length - 1]
   const roofBase = top.base + top.height + 0.4
-  if (model.style === 'house') {
-    const x0 = -2, x1 = W + 2, z0 = 6, z1 = D + 2, rise = ((z1 - z0) / 2) * Math.tan((25 * Math.PI) / 180)
-    const zm = (z0 + z1) / 2
-    const shape = new THREE.BufferGeometry()
-    const v = [
-      x0, roofBase, z0, x1, roofBase, z0, x1, roofBase + rise, zm, x0, roofBase, z0, x1, roofBase + rise, zm, x0, roofBase + rise, zm,
-      x0, roofBase + rise, zm, x1, roofBase + rise, zm, x1, roofBase, z1, x0, roofBase + rise, zm, x1, roofBase, z1, x0, roofBase, z1,
-    ]
-    shape.setAttribute('position', new THREE.Float32BufferAttribute(v, 3))
-    shape.computeVertexNormals()
-    const roof = new THREE.Mesh(shape, mat.roof)
-    roof.castShadow = true
-    covers.add(roof)
-    const gable = new THREE.BufferGeometry()
-    const g = (x: number) => [x, roofBase, z0 + 2, x, roofBase, z1 - 2, x, roofBase + rise - 0.6, zm]
-    gable.setAttribute('position', new THREE.Float32BufferAttribute([...g(0.1), ...g(W - 0.1)], 3))
-    gable.computeVertexNormals()
-    covers.add(new THREE.Mesh(gable, new THREE.MeshStandardMaterial({ color: style.exterior, side: THREE.DoubleSide })))
-    box(covers, x0, roofBase - 0.4, z0, x1 - x0, 0.4, z1 - z0, mat.trim, false)
-  } else if (model.style === 'warehouse') {
+  const roof: RoofSpec = model.roof ?? (model.style === 'house' ? { kind: 'gable', x0: -2, x1: W + 2, z0: -2, z1: D + 2, pitch: 25 } : { kind: 'flat' })
+  const roofMesh = (v: number[], m: THREE.Material = mat.roof) => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3))
+    g.computeVertexNormals()
+    const mesh = new THREE.Mesh(g, m)
+    mesh.castShadow = true
+    covers.add(mesh)
+  }
+  type P3 = [number, number, number]
+  const quad = (v: number[], p: P3, q: P3, r: P3, s: P3) => v.push(...p, ...q, ...r, ...p, ...r, ...s)
+  const at = (x: number, z: number, h = 0): P3 => [x, roofBase + h, z]
+  if (model.style === 'warehouse') {
     box(covers, -1, roofBase - 0.4, -1, W + 2, 1, D + 2, paint('#94a3b8', 0.6, 0.4))
     for (let x = 20; x < W; x += 40) box(covers, x, roofBase + 0.6, 10, 6, 0.3, D - 20, paint('#e0f2fe', 0.2))
+  } else if (roof.kind === 'gable') {
+    const { x0, x1, z0, z1 } = roof
+    const zm = (z0 + z1) / 2, rise = ((z1 - z0) / 2) * Math.tan((roof.pitch * Math.PI) / 180)
+    const v: number[] = []
+    quad(v, at(x0, z0), at(x1, z0), at(x1, zm, rise), at(x0, zm, rise))
+    quad(v, at(x0, zm, rise), at(x1, zm, rise), at(x1, z1), at(x0, z1))
+    roofMesh(v)
+    const gable = (x: number) => [x, roofBase, z0 + 2, x, roofBase, z1 - 2, x, roofBase + rise - 0.6, zm]
+    roofMesh([...gable(x0 + 2.1), ...gable(x1 - 2.1)], new THREE.MeshStandardMaterial({ color: style.exterior, side: THREE.DoubleSide }))
+    box(covers, x0, roofBase - 0.4, z0, x1 - x0, 0.4, z1 - z0, mat.trim, false)
+  } else if (roof.kind === 'hip') {
+    const { x0, x1, z0, z1, court } = roof
+    const t = Math.tan((roof.pitch * Math.PI) / 180)
+    const v: number[] = []
+    if (court) {
+      // A ring of slopes: outward to the eaves and inward to the courtyard gutter.
+      const rx0 = (x0 + court.x0) / 2, rx1 = (x1 + court.x1) / 2, rz0 = (z0 + court.z0) / 2, rz1 = (z1 + court.z1) / 2
+      const h = (Math.min(court.x0 - x0, x1 - court.x1, court.z0 - z0, z1 - court.z1) / 2) * t
+      quad(v, at(x0, z0), at(x1, z0), at(rx1, rz0, h), at(rx0, rz0, h))
+      quad(v, at(x1, z0), at(x1, z1), at(rx1, rz1, h), at(rx1, rz0, h))
+      quad(v, at(x1, z1), at(x0, z1), at(rx0, rz1, h), at(rx1, rz1, h))
+      quad(v, at(x0, z1), at(x0, z0), at(rx0, rz0, h), at(rx0, rz1, h))
+      quad(v, at(rx0, rz0, h), at(rx1, rz0, h), at(court.x1, court.z0), at(court.x0, court.z0))
+      quad(v, at(rx1, rz0, h), at(rx1, rz1, h), at(court.x1, court.z1), at(court.x1, court.z0))
+      quad(v, at(rx1, rz1, h), at(rx0, rz1, h), at(court.x0, court.z1), at(court.x1, court.z1))
+      quad(v, at(rx0, rz1, h), at(rx0, rz0, h), at(court.x0, court.z0), at(court.x0, court.z1))
+    } else if (x1 - x0 >= z1 - z0) {
+      const r = (z1 - z0) / 2, zm = (z0 + z1) / 2, h = r * t
+      quad(v, at(x0, z0), at(x1, z0), at(x1 - r, zm, h), at(x0 + r, zm, h))
+      quad(v, at(x1, z1), at(x0, z1), at(x0 + r, zm, h), at(x1 - r, zm, h))
+      v.push(...at(x0, z1), ...at(x0, z0), ...at(x0 + r, zm, h), ...at(x1, z0), ...at(x1, z1), ...at(x1 - r, zm, h))
+    } else {
+      const r = (x1 - x0) / 2, xm = (x0 + x1) / 2, h = r * t
+      quad(v, at(x0, z1), at(x0, z0), at(xm, z0 + r, h), at(xm, z1 - r, h))
+      quad(v, at(x1, z0), at(x1, z1), at(xm, z1 - r, h), at(xm, z0 + r, h))
+      v.push(...at(x0, z0), ...at(x1, z0), ...at(xm, z0 + r, h), ...at(x1, z1), ...at(x0, z1), ...at(xm, z1 - r, h))
+    }
+    roofMesh(v)
   } else {
-    box(covers, -0.5, roofBase - 0.4, -0.5, W + 1, 1.2, D + 1, paint('#cbd5e1', 0.9))
+    // Flat roof slab over every enclosed room of the top floor, leaving terraces and atria open.
+    const li = model.levels.length - 1, lv = model.levels[li]
+    const slab = paint('#cbd5e1', 0.9)
+    const all: Room[] = lv.fill ? [...lv.rooms, [0, 0, W, D, lv.fill]] : lv.rooms
+    const openTop = all.some((r) => r[5] === 'dashed' || r[5] === 'void')
+    if (!openTop) box(covers, -0.5, roofBase - 0.4, -0.5, W + 1, 1.2, D + 1, slab)
+    else all.forEach((r, ri) => {
+      if (r[5] === 'dashed' || r[5] === 'void') return
+      for (const o of owned(li, ri, r[0], r[1], r[2], r[3])) box(covers, o.x, roofBase - 0.4, o.y, o.w, 1.2, o.h, slab)
+    })
+    if (model.style === 'retail') {
+      const pm = paint('#e2e8f0', 0.8)
+      box(covers, -0.5, roofBase + 0.8, -0.5, W + 1, 3, 0.6, pm)
+      box(covers, -0.5, roofBase + 0.8, D - 0.1, W + 1, 3, 0.6, pm)
+      box(covers, -0.5, roofBase + 0.8, -0.5, 0.6, 3, D + 1, pm)
+      box(covers, W - 0.1, roofBase + 0.8, -0.5, 0.6, 3, D + 1, pm)
+    }
   }
 
   // -- Site --------------------------------------------------------------
   const site = new THREE.Group()
   const lot = model.lot
-  const ground = floorPlane(lot.maxX - lot.minX + 400, lot.maxY - lot.minY + 400, 8, model.style === 'warehouse' ? mat.asphalt : mat.grass)
+  const paved = model.style === 'warehouse' || model.style === 'retail'
+  const ground = floorPlane(lot.maxX - lot.minX + 400, lot.maxY - lot.minY + 400, 8, paved ? mat.asphalt : mat.grass)
   ground.position.set((lot.minX + lot.maxX) / 2, -0.02, (lot.minY + lot.maxY) / 2)
   site.add(ground)
-  if (model.style === 'house') {
-    const drive = floorPlane(16, 18, 4, mat.pavers)
-    drive.position.set(8, 0.005, D + 9)
-    site.add(drive)
-    const path = floorPlane(16, 10, 4, mat.pavers)
-    path.position.set(8, 0.005, -5)
-    site.add(path)
-    // compound wall, with a gate on the south
+  for (const p of model.site?.paving ?? []) {
+    const pave = floorPlane(p.w, p.d, 4, mat.pavers)
+    pave.position.set(p.x + p.w / 2, 0.005, p.y + p.d / 2)
+    site.add(pave)
+  }
+  const compound = model.site?.compound
+  if (compound) {
     const cw = paint('#e7dcc6', 0.95)
-    box(site, lot.minX, 0, lot.minY, lot.maxX - lot.minX, 4, 0.6, cw)
+    const run = (x0: number, x1: number, z: number) => { if (x1 - x0 > 0.1) box(site, x0, 0, z, x1 - x0, 4, 0.6, cw) }
+    for (const [side, z] of [['N', lot.minY], ['S', lot.maxY - 0.6]] as const) {
+      if (compound.side === side) { run(lot.minX, compound.from, z); run(compound.to, lot.maxX, z) } else run(lot.minX, lot.maxX, z)
+    }
     box(site, lot.minX, 0, lot.minY, 0.6, 4, lot.maxY - lot.minY, cw)
     box(site, lot.maxX - 0.6, 0, lot.minY, 0.6, 4, lot.maxY - lot.minY, cw)
-    box(site, lot.minX, 0, lot.maxY - 0.6, 18 - lot.minX, 4, 0.6, cw)
-    box(site, 34, 0, lot.maxY - 0.6, lot.maxX - 34, 4, 0.6, cw)
+  }
+  for (const b of model.site?.berms ?? []) box(site, b.x, -0.02, b.y, b.w, b.h, b.d, paint('#6f9a4c', 1))
+  for (const p of model.site?.parking ?? []) {
+    const line = paint('#f1f5f9', 0.7)
+    for (let i = 0; i <= p.n; i++) box(site, p.x + i * p.step - 0.15, 0, p.y, 0.3, 0.03, p.d, line, false)
   }
   if (model.style === 'office') {
     box(site, -10, 0, -10, W + 20, model.baseElevation - 0.7, D + 20, paint('#94a3b8', 0.5, 0.2))
@@ -585,10 +716,10 @@ function centred(obj: THREE.Object3D, w: number, d: number) {
   return g
 }
 
-function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[], ceil: number): { placed: Placed[]; focus?: RoomInfo['focus'] } {
+function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[], ceil: number, style: TourModel['style']): { placed: Placed[]; focus?: RoomInfo['focus'] } {
   const [rx, ry, rw, rh, label, kind] = r
   const name = label.toLowerCase()
-  if (kind === 'stair' || kind === 'core') return { placed: [] }
+  if (kind === 'stair' || kind === 'core' || kind === 'void') return { placed: [] }
   const sides: Side[] = ['N', 'S', 'W', 'E']
   const sideLen = (s: Side) => (s === 'N' || s === 'S' ? rw : rh)
   const doorLen = (s: Side) => doors.filter((d) => d.side === s).reduce((t, d) => t + (d.b - d.a), 0)
@@ -644,7 +775,50 @@ function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[],
     return Math.min(Math.max(u, 0.3), Math.max(0.3, L - w - 0.3))
   }
 
-  if (name.includes('bed')) {
+  if (name.includes('food court') || name.includes('café') || name.includes('restaurant')) {
+    // tables for two on an 8 ft grid
+    const nx = Math.min(8, Math.floor((rw - 2) / 8)), ny = Math.min(4, Math.floor((rh - 2) / 8))
+    for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+      const cx = rx + (rw - nx * 8) / 2 + 4 + i * 8, cy = ry + (rh - ny * 8) / 2 + 4 + j * 8
+      const fabric = pick(PALETTE.covers, `${label}${i}${j}`)
+      putAt(F.diningTable(k, 3.2, 3.2, ceil), 3.2, 3.2, cx, cy, 0, true, true)
+      putAt(F.diningChair(k, fabric), 1.5, 1.5, cx, cy - 2.05, 0)
+      putAt(F.diningChair(k, fabric), 1.5, 1.5, cx, cy + 2.05, Math.PI)
+    }
+  } else if (name.includes('supermarket') || name.includes('department')) {
+    // back-to-back gondola runs across the floor
+    const len = rw - 12, cx = rx + rw / 2
+    for (let yy = ry + 5; yy + 2 < ry + rh - 6; yy += 8) {
+      putAt(F.shelving(k, len), len, 1.5, cx, yy, 0, true, true)
+      putAt(F.shelving(k, len), len, 1.5, cx, yy + 1.55, Math.PI, true)
+    }
+  } else if (name.includes('fitness') || name.includes('gym')) {
+    const n = Math.max(1, Math.min(6, Math.floor((L - 1) / 4)))
+    put(F.rug(k, n * 4, 8), 0.6, 0.1)
+    for (let i = 0; i < n; i++) put(F.treadmill(k), 1 + i * 4, 0.3, 2.8, 6, true)
+  } else if (kind === 'glass' && style === 'retail') {
+    // shop: wall shelving plus a display table in the middle
+    put(F.shelving(k, L - 1), 0.5, 0.1, L - 1, 1.5, true)
+    if (Dp > 14) { const [cx, cy] = P(L / 2, Dp / 2); putAt(F.coffeeTable(k), 4.4, 2.4, cx, cy, fr.rot, true) }
+  } else if (kind === 'open') {
+    // circulation space stays clear; planting comes from the plan's objects
+  } else if (name.includes('washroom')) {
+    for (let i = 0; i * 3.4 + 3.4 < L; i++) put(F.vanity(k, 3), 0.4 + i * 3.4, 0, 3, 1.8, i === 0)
+  } else if (name.includes('laundry')) {
+    put(F.vanity(k, 3), 0.4, 0, 3, 1.8, true)
+    if (L > 8) put(F.shelving(k, Math.min(6, L - 4.6)), 4, 0.1, Math.min(6, L - 4.6), 1.5)
+  } else if (name.includes('prayer')) {
+    const u = slot(1.7)
+    put(F.rug(k, 5, 4), u - 1.65, 2.2)
+    put(F.nightstand(k), u, 0.1, 1.7, 1.5, true)
+    if (u > 1.8) put(F.plant(k, 3.4, 'bush'), u - 1.6, 0.2)
+    if (u + 3.3 < L) put(F.plant(k, 3.4, 'bush'), u + 1.9, 0.2)
+  } else if (name.includes('courtyard') || name.includes('mutram')) {
+    put(F.plant(k, 4.4, 'bush'), 0.4, 0.4, 1.4, 1.4, true)
+    put(F.plant(k, 4.4, 'bush'), L - 1.8, 0.4, 1.4, 1.4)
+    put(F.plant(k, 4.4, 'bush'), 0.4, Dp - 1.8, 1.4, 1.4)
+    put(F.plant(k, 4.4, 'bush'), L - 1.8, Dp - 1.8, 1.4, 1.4)
+  } else if (name.includes('bed')) {
     const u = slot(5.2)
     put(F.rug(k, 7.2, 6), u - 1, 2.6)
     put(F.bed(k, 5.2, 7, pick(PALETTE.covers, label), pick(PALETTE.heads, label)), u, 0.05, 5.2, 7, true)
@@ -652,7 +826,7 @@ function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[],
     if (u + 7.3 < L) put(F.nightstand(k), u + 5.45, 0.1, 1.7, 1.5)
     if (Dp > 12 && doorLen(front) === 0 && L > 8) putFront(F.wardrobe(k, Math.min(8, L - 2)), (L - Math.min(8, L - 2)) / 2, Math.min(8, L - 2), 2)
     else if (u + 9.2 < L) put(F.plant(k, 4.2, 'tall'), L - 1.7, 0.2)
-  } else if (name.includes('living') || name.includes('lounge')) {
+  } else if (['living', 'lounge', 'saloon', 'sitting', 'media'].some((n) => name.includes(n))) {
     const sw = Math.min(7.5, L - 2), u = slot(sw)
     put(F.rug(k, sw + 2.4, 6.4), u - 1.2, 2.4)
     put(F.sofa(k, sw, 3.2, pick(PALETTE.sofas, label), ['#c2410c', '#e7e5e4']), u, 0.1, sw, 3.2, true)
@@ -674,7 +848,7 @@ function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[],
     const fridge = L > 12
     put(F.kitchen(k, L - 0.2, fridge), 0.1, 0, L - 0.2, 2.35, true)
     if (Dp > 9 && L > 9) { const iw = Math.min(6, L - 5); put(F.island(k, iw), (L - iw) / 2, Dp / 2 - 0.6, iw, 3.6) }
-  } else if (name.includes('bath')) {
+  } else if (name.includes('bath') || name.includes('powder')) {
     const u = slot(5.4)
     put(F.vanity(k, 3), u, 0, 3, 1.8, true)
     put(F.toilet(k), u + 3.5, 0, 1.8, 2.4)
@@ -689,7 +863,7 @@ function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[],
     const [cx, cy] = P(u + 2.25, 3.3)
     putAt(F.officeChair(k, '#334155'), 1.6, 1.6, cx, cy, fr.rot + Math.PI)
     if (doorLen(front) === 0) putFront(F.bookshelf(k, Math.min(4, L - 1)), 0.5, Math.min(4, L - 1), 1.1)
-  } else if (name.includes('car porch')) {
+  } else if (name.includes('car porch') || name.includes('garage')) {
     put(F.car(k), 1.5, (Dp - 13.6) / 2, 6, 13.6, true)
   } else if (kind === 'dashed') {
     put(F.loungeChair(k, '#e7dcc6'), 0.8, 0.4, 2.4, 2.6, true)
@@ -716,10 +890,10 @@ function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[],
     }
     putFront(F.shelving(k, 6), 1, 6, 1.5)
     put(F.plant(k, 4.5, 'tall'), L - 1.8, Dp - 2)
-  } else if (name.includes('lobby') || name.includes('landing')) {
+  } else if (['lobby', 'landing', 'hall', 'foyer', 'passage'].some((n) => name.includes(n))) {
     put(F.plant(k, 4.4, 'tall'), 0.4, 0.4)
   }
-  const centredRoom = name.includes('dining') || name.includes('meeting') || name.includes('car porch')
+  const centredRoom = ['dining', 'meeting', 'car porch', 'garage', 'food court', 'supermarket', 'department', 'courtyard', 'mutram'].some((n) => name.includes(n))
   const [fx, fy] = centredRoom ? [rx + rw / 2, ry + rh / 2] : P(L / 2, 1.5)
   return { placed: out, focus: { x: fx, y: fy, dist: centredRoom ? Math.hypot(rw, rh) * 0.38 : Math.min(Dp * 0.78, 13) } }
 }
@@ -784,6 +958,18 @@ function objectModel(k: Kit, o: PlanObject): THREE.Object3D {
     case 'plant':
       g.add(F.plant(k, h + 1, 'bush'))
       break
+    case 'car':
+      g.add(F.car(k, ['#9f1239', '#1e3a8a', '#e5e7eb', '#111827', '#64748b', '#0f766e'][Math.round(x) % 6]))
+      break
+    case 'pool': {
+      const coping = m.paint('#ece6d8', 0.8)
+      k.box(g, -1, 0, -1, w + 2, 0.3, 1, coping)
+      k.box(g, -1, 0, d, w + 2, 0.3, 1, coping)
+      k.box(g, -1, 0, 0, 1, 0.3, d, coping)
+      k.box(g, w, 0, 0, 1, 0.3, d, coping)
+      k.box(g, 0, 0.02, 0, w, 0.16, d, m.water)
+      break
+    }
     case 'tree': {
       const t = F.tree(k, h)
       t.position.set(w / 2, 0, d / 2)
