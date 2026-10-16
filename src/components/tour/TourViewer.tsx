@@ -3,6 +3,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, Check, Footprints, Laye
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import type { TourModel } from '../../data/floorplans'
 import { buildScene, type BuiltScene, type RoomInfo, type Segment } from './buildScene'
 
@@ -72,8 +73,13 @@ export function TourViewer({ model }: { model: TourModel }) {
 
     const size = built.size
     const c = built.centre
-    scene.add(new THREE.HemisphereLight('#eef5ff', '#7a6a55', 1.25))
-    scene.add(new THREE.AmbientLight('#ffffff', 0.35))
+    // Soft image-based lighting gives metals, glass and lacquer something to reflect.
+    const pmrem = new THREE.PMREMGenerator(renderer)
+    const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environment = envMap
+    scene.environmentIntensity = 0.45
+    scene.add(new THREE.HemisphereLight('#eef5ff', '#7a6a55', 0.85))
+    scene.add(new THREE.AmbientLight('#ffffff', 0.2))
     const sun = new THREE.DirectionalLight('#fff3df', 2.4)
     sun.position.set(c.x + size * 0.7, c.y + size * 1.3, c.z + size * 0.45)
     sun.target.position.copy(c)
@@ -174,23 +180,20 @@ export function TourViewer({ model }: { model: TourModel }) {
       }
     }
     const goTo = (r: RoomInfo) => {
-      let { x, y } = r.spot
-      if (blocked(x, y, r.level)) {
-        outer: for (let rad = 1; rad < 8; rad += 0.5) for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
-          const nx = x + Math.cos(a) * rad, ny = y + Math.sin(a) * rad
-          if (nx > r.x && nx < r.x + r.w && ny > r.y && ny < r.y + r.h && !blocked(nx, ny, r.level)) { x = nx; y = ny; break outer }
-        }
+      // stand back from the middle on clear floor, then look across the room
+      const cx = r.focus?.x ?? r.x + r.w / 2, cy = r.focus?.y ?? r.y + r.h / 2, ideal = r.focus?.dist ?? Math.hypot(r.w, r.h) * 0.3
+      let x = cx, y = cy, bestScore = -Infinity
+      const cols = built.levels[r.level].colliders, step = Math.max(1, Math.max(r.w, r.h) / 24)
+      for (let sx = r.x + 1.5; sx <= r.x + r.w - 1.5; sx += step) for (let sy = r.y + 1.5; sy <= r.y + r.h - 1.5; sy += step) {
+        let clear = 3
+        for (const c of cols) { clear = Math.min(clear, segDist(sx, sy, c)); if (clear < RADIUS) break }
+        if (clear < RADIUS) continue
+        const score = 1.6 * clear - 0.25 * Math.abs(Math.hypot(sx - cx, sy - cy) - ideal)
+        if (score > bestScore) { bestScore = score; x = sx; y = sy }
       }
       w.x = x; w.y = y; w.level = r.level
-      // face the most open direction, so the room fills the view
-      let best = 0
-      for (let k = 0; k < 16; k++) {
-        const a = (k / 16) * Math.PI * 2, fx = -Math.sin(a), fz = -Math.cos(a)
-        let d = 0
-        while (d < 40 && !blocked(x + fx * (d + 0.5), y + fz * (d + 0.5), r.level)) d += 0.5
-        if (d > best) { best = d; w.yaw = a }
-      }
-      w.pitch = -0.05
+      if (Math.hypot(cx - x, cy - y) > 0.5) w.yaw = Math.atan2(-(cx - x), -(cy - y))
+      w.pitch = -Math.atan2(EYE - 3, Math.max(3, Math.hypot(cx - x, cy - y)))
       setMode('walk')
     }
     apiRef.current = {
@@ -359,6 +362,8 @@ export function TourViewer({ model }: { model: TourModel }) {
       mini.removeEventListener('click', onMini)
       controls.dispose()
       built.dispose()
+      envMap.dispose()
+      pmrem.dispose()
       renderer.dispose()
       renderer.domElement.remove()
       apiRef.current = null
