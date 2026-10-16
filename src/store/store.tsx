@@ -4,6 +4,7 @@ import { SEED_PROJECTS } from '../data/projects'
 import type { Activity, Person, Project, Role } from '../data/types'
 import { TODAY_ISO } from '../lib/format'
 import { clamp, gaussian, hashString } from '../lib/random'
+import { useAuth } from './auth'
 
 // Keyed on a hash of the seed so stored demo state resets whenever the seed data changes.
 const STORE_KEY = `nirmana.projects.${hashString(JSON.stringify(SEED_PROJECTS)).toString(36)}`
@@ -125,8 +126,8 @@ export interface Toast {
 
 interface AppCtx {
   projects: Project[]
+  /** The signed-in user's role. */
   role: Role
-  setRole: (r: Role) => void
   getProject: (id: string) => Project | undefined
   /** Applies an immutable update and records an audit-trail entry. */
   update: (projectId: string, fn: (p: Project) => Project, activity?: { text: string; kind: Activity['kind'] }) => void
@@ -141,7 +142,8 @@ const AppContext = createContext<AppCtx | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>(() => load(STORE_KEY, SEED_PROJECTS))
-  const [role, setRoleState] = useState<Role>(() => load(PREFS_KEY, { role: 'client' as Role }).role ?? 'client')
+  const { user, person } = useAuth()
+  const role: Role = user?.role ?? 'client'
   const [toasts, setToasts] = useState<Toast[]>([])
   const toastId = useRef(0)
 
@@ -158,12 +160,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const setRole = useCallback((r: Role) => {
-    setRoleState(r)
-    save(PREFS_KEY, { ...load(PREFS_KEY, {}), role: r })
-  }, [])
-
-  const personFor = useCallback((p: Project, r: Role = role) => (r === 'client' ? p.client : r === 'architect' ? p.architect : p.contractor), [role])
+  // The signed-in user stands in for their own role on every project; the other parties come from project data.
+  const personFor = useCallback((p: Project, r: Role = role) => {
+    if (person && r === person.role) return person
+    return r === 'client' ? p.client : r === 'architect' ? p.architect : p.contractor
+  }, [role, person])
 
   const update = useCallback<AppCtx['update']>((projectId, fn, activity) => {
     setProjects((all) =>
@@ -189,13 +190,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AppCtx>(() => ({
-    projects, role, setRole,
+    projects, role,
     getProject: (id) => projects.find((p) => p.id === id),
     update, personFor,
     reset: () => setProjects(SEED_PROJECTS),
     toasts, toast,
     dismiss: (id) => setToasts((cur) => cur.filter((x) => x.id !== id)),
-  }), [projects, role, setRole, update, personFor, toasts, toast])
+  }), [projects, role, update, personFor, toasts, toast])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
