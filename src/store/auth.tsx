@@ -71,6 +71,26 @@ function randomId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** Hard-coded demo accounts so the app can be tried without signing up. */
+export const DEMO_ACCOUNTS: Record<Role, { name: string; email: string; password: string; org: string; phone: string }> = {
+  architect: { name: 'Demo Architect', email: 'architect@nirmana.demo', password: 'architect123', org: 'Demo Architects (Pvt) Ltd', phone: '+94 77 111 1111' },
+  client: { name: 'Demo Client', email: 'client@nirmana.demo', password: 'client123', org: 'Demo Holdings', phone: '+94 77 222 2222' },
+  contractor: { name: 'Demo Contractor', email: 'contractor@nirmana.demo', password: 'contractor123', org: 'Demo Constructions (Pvt) Ltd', phone: '+94 77 333 3333' },
+}
+
+async function ensureDemoUsers() {
+  const users = readUsers()
+  const missing = (Object.keys(DEMO_ACCOUNTS) as Role[]).filter((r) => !users.some((u) => u.email === DEMO_ACCOUNTS[r].email))
+  if (!missing.length) return
+  const added: StoredUser[] = []
+  for (const role of missing) {
+    const d = DEMO_ACCOUNTS[role]
+    const salt = randomId()
+    added.push({ id: `demo-${role}`, name: d.name, email: d.email, role, org: d.org, phone: d.phone, createdAt: new Date().toISOString(), salt, hash: await hashPassword(d.password, salt) })
+  }
+  writeUsers([...users, ...added])
+}
+
 function publicUser({ salt: _salt, hash: _hash, ...user }: StoredUser): User {
   return user
 }
@@ -120,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logIn = useCallback<AuthCtx['logIn']>(async (email, password, role) => {
+    await ensureDemoUsers()
     const found = readUsers().find((u) => u.email === normalise(email))
     if (!found || (await hashPassword(password, found.salt)) !== found.hash) return 'Incorrect email or password.'
     if (found.role !== role) {

@@ -6,7 +6,7 @@ import { Logo } from '../components/Layout'
 import { Field, inputCls } from '../components/ui'
 import type { Sector } from '../data/estimator'
 import type { Role } from '../data/types'
-import { useAuth } from '../store/auth'
+import { DEMO_ACCOUNTS, useAuth } from '../store/auth'
 import { ROLE_META } from '../store/store'
 
 const ROLE_ICON = { client: UserRound, architect: PencilRuler, contractor: HardHat } satisfies Record<Role, unknown>
@@ -160,6 +160,12 @@ export default function Auth({ mode }: { mode: 'login' | 'signup' }) {
                   ))}
                 </div>
               </div>
+            )}
+
+            {mode === 'login' && (
+              <button type="button" onClick={() => setForm((f) => ({ ...f, email: DEMO_ACCOUNTS[role].email, password: DEMO_ACCOUNTS[role].password }))} className="w-full rounded-lg border border-dashed border-slate-300 px-3 py-2 text-left text-xs text-slate-500 hover:bg-slate-50 cursor-pointer">
+                Demo {meta.label}: <b>{DEMO_ACCOUNTS[role].email}</b> / <b>{DEMO_ACCOUNTS[role].password}</b> — click to fill
+              </button>
             )}
 
             {error && (
