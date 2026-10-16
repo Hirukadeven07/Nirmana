@@ -1,5 +1,8 @@
 # Nirmana — Build with clarity
 
+[![CI](https://github.com/Hirukadeven07/Nirmana/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Hirukadeven07/Nirmana/actions/workflows/ci.yml)
+[![CD](https://github.com/Hirukadeven07/Nirmana/actions/workflows/cd.yml/badge.svg?branch=main)](https://github.com/Hirukadeven07/Nirmana/actions/workflows/cd.yml)
+
 A transparent construction-management web app for the Sri Lankan residential and commercial markets. It connects the **client**, the **architect** and the **contractor** in one workspace, so every plan, rupee and day of progress can be seen and checked. The module structure follows Buildertrend.
 
 ```bash
