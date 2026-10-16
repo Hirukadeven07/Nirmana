@@ -317,7 +317,7 @@ export function buildHouse(plan: HousePlan): HouseScene {
  * Hipped or gable roof over a W × D rectangle centred on the origin, eaves at y = 0.
  * With `gableEnds`, returns only the two vertical triangles closing a gable roof.
  */
-function pitchedRoof(W: number, D: number, pitch: number, type: 'hip' | 'gable', gableEnds = false) {
+export function pitchedRoof(W: number, D: number, pitch: number, type: 'hip' | 'gable', gableEnds = false) {
   const swap = D > W
   const L = swap ? D : W // ridge runs along the longer side
   const S = swap ? W : D
