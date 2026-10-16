@@ -1,0 +1,103 @@
+name: CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never cancel an in-flight production deploy; PR runs are replaced by newer pushes.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24
+  BASE_PATH: /${{ github.event.repository.name }}/
+
+jobs:
+  package:
+    name: Build production bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build for GitHub Pages
+        run: npm run build
+        env:
+          VITE_BASE_PATH: ${{ env.BASE_PATH }}
+      - name: Add SPA fallback for client-side routes
+        run: cp dist/index.html dist/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  smoke-test:
+    name: Smoke test bundle
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+      - name: Unpack bundle under the Pages base path
+        run: |
+          mkdir -p "site${BASE_PATH}"
+          tar -xf artifact.tar -C "site${BASE_PATH}"
+      - name: Serve and probe
+        run: |
+          python3 -m http.server 4173 --directory site >/dev/null 2>&1 &
+          for i in $(seq 1 20); do curl -sf "http://localhost:4173${BASE_PATH}" >/dev/null && break; sleep 0.5; done
+          set -e
+          html=$(curl -sf "http://localhost:4173${BASE_PATH}index.html")
+          echo "$html" | grep -q '<div id="root">' || { echo "index.html missing #root"; exit 1; }
+          curl -sf -o /dev/null "http://localhost:4173${BASE_PATH}404.html"
+          # Every script/stylesheet referenced by index.html must resolve under the base path.
+          for ref in $(echo "$html" | grep -oE '(src|href)="[^"]+"' | cut -d'"' -f2 | grep '^/'); do
+            echo "GET $ref"
+            curl -sf -o /dev/null "http://localhost:4173${ref}" || { echo "broken asset: $ref"; exit 1; }
+          done
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: smoke-test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify:
+    name: Verify live site
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check deployed site responds
+        run: |
+          url="${{ needs.deploy.outputs.page_url }}"
+          for i in $(seq 1 12); do
+            if curl -sf "$url" | grep -q '<div id="root">'; then echo "Live: $url"; exit 0; fi
+            echo "Waiting for $url ($i/12)"; sleep 10
+          done
+          echo "Site did not come up at $url"; exit 1

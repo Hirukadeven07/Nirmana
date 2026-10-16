@@ -25,7 +25,7 @@ export default function App() {
   return (
     <PriceProvider>
       <AppProvider>
-        <BrowserRouter>
+        <BrowserRouter basename={import.meta.env.BASE_URL}>
           <Suspense fallback={<div className="grid h-full place-items-center text-sm text-slate-400">Loading…</div>}>
           <Routes>
             <Route path="/" element={<Landing />} />
