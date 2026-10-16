@@ -1,10 +1,11 @@
 import clsx from 'clsx'
-import { Box, ChevronDown, Eye, Layers, Maximize2, Minimize2, RotateCcw, Scissors, SquareDashedBottom } from 'lucide-react'
+import { Box, ChevronDown, Eye, Footprints, Layers, Maximize2, Minimize2, RotateCcw, Scissors, SquareDashedBottom } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { ROOM_TYPE_META, STATUS_META, type HousePlan, type RoomType, type WorkStatus } from '../../data/housePlan'
 import { buildHouse, type HouseScene } from './buildHouse'
+import { HouseWalk } from './HouseWalk'
 import { presetView, type Preset, type ViewState } from './view'
 
 const EXPLODE_GAP = 14
@@ -49,11 +50,14 @@ export function HouseViewer({ plan, view, onView, selectedId, onSelect, titleFor
   const [full, setFull] = useState(false)
   const [fitKey, setFitKey] = useState(0)
   const [panelOpen, setPanelOpen] = useState(true)
+  const [walking, setWalking] = useState(false)
+  const walkingRef = useRef(false)
   const downAt = useRef<{ x: number; y: number } | null>(null)
   const fittedRef = useRef(false)
   useLayoutEffect(() => {
     viewRef.current = view
     selectedRef.current = selectedId
+    walkingRef.current = walking
   })
 
   /* ── Renderer, camera and render loop (once) ── */
@@ -131,6 +135,7 @@ export function HouseViewer({ plan, view, onView, selectedId, onSelect, titleFor
         camera.position.add(tmp)
         if (f.t >= 1) engine.focus = null
       }
+      if (walkingRef.current) return
       controls.update()
       renderer.render(scene, camera)
       // Floating tag over the selected section.
@@ -281,6 +286,9 @@ export function HouseViewer({ plan, view, onView, selectedId, onSelect, titleFor
             <p.icon size={14} />{p.label}
           </button>
         ))}
+        <button onClick={() => setWalking(true)} className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white transition cursor-pointer hover:brightness-110">
+          <Footprints size={14} />Walk through
+        </button>
       </div>
 
       <div className="absolute right-3 top-3 flex gap-1">
@@ -331,6 +339,8 @@ export function HouseViewer({ plan, view, onView, selectedId, onSelect, titleFor
           <span key={label} className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm ring-1 ring-black/10" style={{ background: color }} />{label}</span>
         ))}
       </div>
+
+      {walking && <HouseWalk plan={plan} onExit={() => setWalking(false)} full={full} onToggleFull={() => (full ? document.exitFullscreen() : hostRef.current?.requestFullscreen())} />}
 
       {hover && hover !== selectedId && (
         <div className="pointer-events-none absolute left-1/2 top-14 -translate-x-1/2 rounded-full bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow ring-1 ring-slate-200">
