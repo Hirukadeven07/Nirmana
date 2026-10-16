@@ -30,6 +30,7 @@ export default function ProjectLayout() {
     { to: `${base}/materials`, label: 'Materials & BOQ' },
     { to: `${base}/plans`, label: 'Plans', count: project.plans.filter((p) => p.status === 'Awaiting client').length },
     { to: `${base}/tour`, label: '3D tour' },
+    { to: `${base}/model`, label: '3D model' },
     { to: `${base}/changes`, label: 'Change orders', count: clientPending.filter((i) => i.kind === 'change').length },
     { to: `${base}/payments`, label: 'Payments', count: clientPending.filter((i) => i.kind === 'payment').length },
     { to: `${base}/ledger`, label: 'Cost ledger' },

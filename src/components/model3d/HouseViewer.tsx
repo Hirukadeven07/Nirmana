@@ -359,6 +359,8 @@ function fitCamera(engine: Engine) {
   const size = engine.house?.size ?? 40
   engine.focus = null
   engine.controls.target.set(0, 9, 0)
+  // Large commercial plans need more room to zoom out than a house does.
+  engine.controls.maxDistance = Math.max(260, size * 3)
   engine.camera.position.set(size * 1.15, size * 0.95, size * 1.45)
   engine.controls.update()
 }

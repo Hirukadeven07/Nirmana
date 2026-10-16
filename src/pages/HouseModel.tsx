@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { ArrowLeft, Download, FileJson, Hammer, Info, Plus, RotateCcw, Ruler, Trash2, Upload } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { PageHeader } from '../components/Layout'
 import { HouseViewer } from '../components/model3d/HouseViewer'
 import { presetView, type ViewState } from '../components/model3d/view'
@@ -9,27 +10,73 @@ import {
   allSections, FINISH_RATES, newRoomId, planExtent, ROOM_TYPE_META, samplePlan, STATUS_META,
   type HousePlan, type PlanFloor, type PlanRoom, type RoofType, type RoomType, type SectionDetails, type WorkStatus,
 } from '../data/housePlan'
+import { housePlanFor } from '../data/projectHousePlan'
 import { rs, rsCompact } from '../lib/format'
 import { useApp } from '../store/store'
 
 const STORE_KEY = 'nirmana.v1.housePlan'
+const SAMPLE = 'sample'
 
-function loadPlan(): HousePlan {
+/** Where a plan is saved: the original key for the sample house, one key per project otherwise. */
+const storageKeyFor = (projectId: string) => (projectId === SAMPLE ? STORE_KEY : `${STORE_KEY}.${projectId}`)
+
+function loadPlan(key: string, fallback: () => HousePlan): HousePlan {
   try {
-    const raw = localStorage.getItem(STORE_KEY)
+    const raw = localStorage.getItem(key)
     if (raw) {
       const p = JSON.parse(raw) as HousePlan
       if (Array.isArray(p.floors) && p.floors.length) return p
     }
   } catch {
-    /* fall back to the sample */
+    /* fall back to the generated plan */
   }
-  return samplePlan()
+  return fallback()
 }
 
+/** Sidebar page: the model for any project in this sector, or the sample house as a template. */
 export default function HouseModel() {
+  const { sector } = useParams()
+  const { projects } = useApp()
+  const [params, setParams] = useSearchParams()
+  const options = projects.filter((p) => p.sector === sector)
+  const wanted = params.get('project')
+  const projectId = wanted === SAMPLE || options.some((p) => p.id === wanted) ? wanted! : options[0]?.id ?? SAMPLE
+  const project = options.find((p) => p.id === projectId)
+  const picker = (
+    <select className={clsx(inputCls, 'h-9 w-auto py-0 text-sm')} value={projectId} onChange={(e) => setParams({ project: e.target.value }, { replace: true })} aria-label="Project">
+      {options.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      <option value={SAMPLE}>Sample house (template)</option>
+    </select>
+  )
+  return (
+    <div className="mx-auto max-w-[1400px] space-y-6 p-4 sm:p-6 lg:p-8">
+      <HouseModelWorkspace
+        key={projectId}
+        storageKey={storageKeyFor(projectId)}
+        makePlan={project ? () => housePlanFor(project) : samplePlan}
+        resetLabel={project ? 'Project plan' : 'Sample plan'}
+        header={(actions) => (
+          <PageHeader
+            eyebrow="Plan to model"
+            title="3D house model"
+            subtitle="Generated from each project's floor plans. Click any room or building element to see its specification, quantities and progress."
+            actions={<>{picker}{actions}</>}
+          />
+        )}
+      />
+    </div>
+  )
+}
+
+/** The model, details panel and plan editor for one plan, saved under `storageKey`. */
+export function HouseModelWorkspace({ storageKey, makePlan, resetLabel, header }: {
+  storageKey: string
+  makePlan: () => HousePlan
+  resetLabel: string
+  header: (actions: ReactNode) => ReactNode
+}) {
   const { toast } = useApp()
-  const [plan, setPlan] = useState<HousePlan>(loadPlan)
+  const [plan, setPlan] = useState<HousePlan>(() => loadPlan(storageKey, makePlan))
   const [view, setView] = useState<ViewState>(() => presetView('exterior', plan.floors.length))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [floorIdx, setFloorIdx] = useState(0)
@@ -37,8 +84,8 @@ export default function HouseModel() {
   const editorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(plan)) } catch { /* storage unavailable */ }
-  }, [plan])
+    try { localStorage.setItem(storageKey, JSON.stringify(plan)) } catch { /* storage unavailable */ }
+  }, [plan, storageKey])
 
   const sections = useMemo(() => allSections(plan), [plan])
   const byId = useMemo(() => new Map(sections.map((s) => [s.id, s])), [sections])
@@ -109,12 +156,12 @@ export default function HouseModel() {
     }
   }
   const resetPlan = () => {
-    const p = samplePlan()
+    const p = makePlan()
     setPlan(p)
     setView(presetView('exterior', p.floors.length))
     setSelectedId(null)
     setFloorIdx(0)
-    toast({ title: 'Sample plan restored', tone: 'info' })
+    toast({ title: `${resetLabel} restored`, tone: 'info' })
   }
 
   const totals = useMemo(() => {
@@ -126,20 +173,15 @@ export default function HouseModel() {
   }, [plan, sections])
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-6 p-4 sm:p-6 lg:p-8">
-      <PageHeader
-        eyebrow="Plan to model"
-        title="3D house model"
-        subtitle="Generated from the plan and details below. Click any room or building element to see its specification, quantities and progress."
-        actions={
-          <>
-            <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importPlan(f); e.target.value = '' }} />
-            <Button size="sm" onClick={() => fileRef.current?.click()}><Upload size={14} />Import plan</Button>
-            <Button size="sm" onClick={exportPlan}><Download size={14} />Export plan</Button>
-            <Button size="sm" variant="ghost" onClick={resetPlan}><RotateCcw size={14} />Sample plan</Button>
-          </>
-        }
-      />
+    <div className="space-y-6">
+      {header(
+        <>
+          <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importPlan(f); e.target.value = '' }} />
+          <Button size="sm" onClick={() => fileRef.current?.click()}><Upload size={14} />Import plan</Button>
+          <Button size="sm" onClick={exportPlan}><Download size={14} />Export plan</Button>
+          <Button size="sm" variant="ghost" onClick={resetPlan}><RotateCcw size={14} />{resetLabel}</Button>
+        </>,
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
         <HouseViewer plan={plan} view={view} onView={setView} selectedId={selectedId} onSelect={select} titleFor={(id) => byId.get(id)?.title} />

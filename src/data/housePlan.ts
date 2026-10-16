@@ -4,7 +4,7 @@
  * section's details are all derived from this one object, so editing it updates all three.
  */
 
-export type RoomType = 'living' | 'bedroom' | 'kitchen' | 'wet' | 'circulation' | 'stair' | 'utility' | 'study' | 'outdoor'
+export type RoomType = 'living' | 'bedroom' | 'kitchen' | 'wet' | 'circulation' | 'stair' | 'utility' | 'study' | 'commercial' | 'outdoor'
 export type WorkStatus = 'Not started' | 'In progress' | 'Complete'
 export type RoofType = 'hip' | 'gable' | 'flat'
 
@@ -47,6 +47,8 @@ export interface HousePlan {
   roof: { type: RoofType; pitch: number; material: string; overhang: number }
   structure: { foundation: string; frame: string; walls: string; slab: string }
   floors: PlanFloor[]
+  /** Progress (0–100) of the structural sections. Without it they show as complete and the roof as not started. */
+  progress?: { foundation: number; groundSlab: number; slabs: number[]; stair: number; roof: number }
 }
 
 export const ROOM_TYPE_META: Record<RoomType, { label: string; color: string }> = {
@@ -58,6 +60,7 @@ export const ROOM_TYPE_META: Record<RoomType, { label: string; color: string }> 
   stair: { label: 'Stair', color: '#c6bba8' },
   utility: { label: 'Utility', color: '#d4cdc0' },
   study: { label: 'Study', color: '#dcc9a8' },
+  commercial: { label: 'Commercial', color: '#cfc3dd' },
   outdoor: { label: 'Outdoor', color: '#b7c2a5' },
 }
 
@@ -259,8 +262,15 @@ export function roofArea(plan: HousePlan) {
   return { plan: planArea, slope }
 }
 
+/** Status and progress of a structural section, from the plan's progress when it has one. */
+function stage(pct: number | undefined, fallback: number): { status: WorkStatus; progress: number } {
+  const progress = Math.round(pct ?? fallback)
+  return { status: progress >= 100 ? 'Complete' : progress > 0 ? 'In progress' : 'Not started', progress }
+}
+
 export function structureDetails(plan: HousePlan): SectionDetails[] {
   const out: SectionDetails[] = []
+  const pr = plan.progress
   const ground = plan.floors[0]
   if (!ground) return out
   const gfp = footprint(ground.rooms)
@@ -285,8 +295,7 @@ export function structureDetails(plan: HousePlan): SectionDetails[] {
       { item: 'Cement (50 kg)', qty: Math.round(footingM3 * 2.6 + perim * 0.12), unit: 'bags' },
     ],
     cost: Math.round(perim * 9200 / 1000) * 1000,
-    status: 'Complete',
-    progress: 100,
+    ...stage(pr?.foundation, 100),
   })
   const groundArea = ground.rooms.filter(isEnclosed).reduce((s, r) => s + r.w * r.d, 0)
   out.push({
@@ -301,8 +310,7 @@ export function structureDetails(plan: HousePlan): SectionDetails[] {
       { item: 'Polythene membrane', qty: Math.round(groundArea * 1.1), unit: 'sq ft' },
     ],
     cost: Math.round(groundArea * 520 / 1000) * 1000,
-    status: 'Complete',
-    progress: 100,
+    ...stage(pr?.groundSlab, 100),
   })
   let level = plan.plinth
   plan.floors.forEach((f, i) => {
@@ -323,8 +331,7 @@ export function structureDetails(plan: HousePlan): SectionDetails[] {
         { item: 'Formwork', qty: Math.round(area * 1.1), unit: 'sq ft' },
       ],
       cost: Math.round(area * 1850 / 1000) * 1000,
-      status: 'Complete',
-      progress: 100,
+      ...stage(pr?.slabs[i - 1], 100),
     })
   })
   const stair = ground.rooms.find((r) => r.type === 'stair')
@@ -342,8 +349,7 @@ export function structureDetails(plan: HousePlan): SectionDetails[] {
         { item: 'Granite treads & risers', qty: Math.round(risers * 4.2), unit: 'sq ft' },
       ],
       cost: 685000,
-      status: 'Complete',
-      progress: 100,
+      ...stage(pr?.stair, 100),
     })
   }
   const ra = roofArea(plan)
@@ -369,8 +375,7 @@ export function structureDetails(plan: HousePlan): SectionDetails[] {
           { item: 'Ridge tiles', qty: Math.round((plan.roof.type === 'hip' ? 2.4 : 1) * Math.sqrt(ra.plan)), unit: 'nos' },
         ],
     cost: Math.round(ra.slope * (plan.roof.type === 'flat' ? 1100 : 780) / 1000) * 1000,
-    status: 'Not started',
-    progress: 0,
+    ...stage(pr?.roof, 0),
   })
   return out
 }
