@@ -1,13 +1,13 @@
 import clsx from 'clsx'
 import {
-  Bell, Building2, Calculator, CheckCircle2, ChevronDown, ClipboardCheck, FolderKanban, Home, Info, LayoutDashboard, LineChart, MapPin, Menu, RotateCcw, Ruler, X,
+  Bell, Box, Building2, Calculator, CheckCircle2, ChevronDown, ClipboardCheck, FolderKanban, Home, Info, LayoutDashboard, LineChart, LogOut, MapPin, Menu, RotateCcw, Ruler, X,
 } from 'lucide-react'
 import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { Sector } from '../data/estimator'
 import { DISTRICTS } from '../data/materials'
-import type { Role } from '../data/types'
 import { pendingItems } from '../lib/metrics'
+import { useAuth } from '../store/auth'
 import { ROLE_META, useApp, usePrices } from '../store/store'
 import { Ticker } from './Ticker'
 import { Avatar } from './ui'
@@ -63,31 +63,35 @@ function SectorSwitch({ sector }: { sector: Sector }) {
   )
 }
 
-function RoleSwitcher() {
-  const { role, setRole } = useApp()
+function AccountMenu() {
+  const { user, logOut } = useAuth()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  if (!user) return null
+  const meta = ROLE_META[user.role]
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white pl-1.5 pr-2.5 h-9 text-sm hover:bg-slate-50 cursor-pointer">
-        <span className="rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ background: ROLE_META[role].bg, color: ROLE_META[role].color }}>{ROLE_META[role].label}</span>
-        <span className="hidden sm:inline text-slate-500 text-xs">view</span>
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 rounded-lg pl-1 pr-1.5 h-10 hover:bg-slate-100 cursor-pointer" aria-label="Account menu">
+        <Avatar name={user.name} role={user.role} size={32} />
+        <span className="hidden xl:block text-left leading-tight">
+          <span className="block text-[13px] font-semibold text-slate-800">{user.name}</span>
+          <span className="block text-[11px] text-slate-500">{user.org || meta.label}</span>
+        </span>
+        <span className="rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
         <ChevronDown size={14} className="text-slate-400" />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-40 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl rise">
-            <p className="px-2.5 pt-1.5 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Switch perspective</p>
-            {(Object.keys(ROLE_META) as Role[]).map((r) => (
-              <button key={r} onClick={() => { setRole(r); setOpen(false) }} className={clsx('flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-slate-50 cursor-pointer', r === role && 'bg-slate-50')}>
-                <span className="grid size-8 place-items-center rounded-lg text-xs font-bold" style={{ background: ROLE_META[r].bg, color: ROLE_META[r].color }}>{ROLE_META[r].label[0]}</span>
-                <span className="flex-1">
-                  <span className="block text-sm font-semibold text-slate-800">{ROLE_META[r].label}</span>
-                  <span className="block text-xs text-slate-500">{ROLE_META[r].description}</span>
-                </span>
-                {r === role && <CheckCircle2 size={16} className="text-accent" />}
-              </button>
-            ))}
+          <div className="absolute right-0 z-40 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl rise">
+            <div className="px-2.5 pt-1.5 pb-2.5 border-b border-slate-100">
+              <p className="text-sm font-semibold text-slate-800">{user.name}</p>
+              <p className="text-xs text-slate-500 truncate">{user.email}</p>
+              <p className="mt-1.5 text-[11px] text-slate-500">Signed in as <span className="font-semibold" style={{ color: meta.color }}>{meta.label}</span>: {meta.description.toLowerCase()}</p>
+            </div>
+            <button onClick={() => { logOut(); navigate('/login', { replace: true }) }} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 cursor-pointer">
+              <LogOut size={15} className="text-slate-400" />Log out
+            </button>
           </div>
         </>
       )}
@@ -130,6 +134,7 @@ export function AppLayout() {
     { to: `${base}/market`, label: 'Market prices', icon: LineChart, live: true },
     { to: `${base}/estimator`, label: 'Cost estimator', icon: Calculator },
     { to: `${base}/calculators`, label: 'Material calculators', icon: Ruler },
+    { to: `${base}/model`, label: '3D house model', icon: Box },
   ]
 
   const sidebar = (
@@ -190,12 +195,11 @@ export function AppLayout() {
             </div>
             <div className="flex-1" />
             <DistrictSelect />
-            <RoleSwitcher />
             <Link to={`${base}/approvals`} className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Notifications">
               <Bell size={18} />
               {pending > 0 && <span className="absolute right-1 top-1 size-2 rounded-full bg-red-500 ring-2 ring-white" />}
             </Link>
-            <UserChip />
+            <AccountMenu />
           </div>
           <div className="border-t border-slate-100 bg-slate-50/70 py-1.5"><Ticker /></div>
         </header>
@@ -206,23 +210,6 @@ export function AppLayout() {
         </main>
       </div>
       <Toasts />
-    </div>
-  )
-}
-
-function UserChip() {
-  const { role, projects, personFor } = useApp()
-  const sector = useSector()
-  const first = projects.find((p) => p.sector === sector)
-  if (!first) return null
-  const me = personFor(first)
-  return (
-    <div className="hidden sm:flex items-center gap-2.5 pl-1">
-      <Avatar name={me.name} role={role} size={34} />
-      <div className="hidden xl:block leading-tight">
-        <div className="text-[13px] font-semibold text-slate-800">{me.name}</div>
-        <div className="text-[11px] text-slate-500">{me.org}</div>
-      </div>
     </div>
   )
 }

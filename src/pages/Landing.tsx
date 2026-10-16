@@ -12,6 +12,7 @@ import type { Sector } from '../data/estimator'
 import { MATERIAL_BY_ID } from '../data/materials'
 import type { Role } from '../data/types'
 import { monthLabel, num, rsCompact } from '../lib/format'
+import { useAuth } from '../store/auth'
 import { ROLE_META, useApp, usePrices } from '../store/store'
 
 const FEATURES = [
@@ -25,7 +26,8 @@ const FEATURES = [
 
 export default function Landing() {
   const navigate = useNavigate()
-  const { role, setRole, projects } = useApp()
+  const { projects } = useApp()
+  const { user } = useAuth()
   const { prices, localPrice } = usePrices()
   const [sector, setSector] = useState<Sector>('residential')
 
@@ -33,9 +35,10 @@ export default function Landing() {
     document.documentElement.dataset.sector = sector
   }, [sector])
 
-  const enter = (s: Sector, r: Role = role) => {
-    setRole(r)
-    navigate(`/${s}/dashboard`)
+  // Signed-in users go straight to their workspace; everyone else logs in first.
+  const enter = (s: Sector, r?: Role) => {
+    if (user) navigate(`/${s}/dashboard`)
+    else navigate(`/login?sector=${s}${r ? `&role=${r}` : ''}`)
   }
 
   const hero = projects.find((p) => p.id === (sector === 'residential' ? 'perera-residence' : 'lotus-grove'))!
@@ -57,7 +60,7 @@ export default function Landing() {
               <a href="#transparency" className="hover:text-white">How it works</a>
               <a href="#sectors" className="hover:text-white">Residential & Commercial</a>
             </div>
-            <button onClick={() => enter(sector)} className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100 cursor-pointer">Open workspace</button>
+            <button onClick={() => enter(sector)} className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100 cursor-pointer">{user ? 'Open workspace' : 'Log in'}</button>
           </nav>
 
           <div className="grid gap-12 pb-20 pt-10 lg:grid-cols-[1.05fr_1fr] lg:pt-16">
@@ -81,7 +84,7 @@ export default function Landing() {
                 ))}
               </div>
 
-              <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">Enter the demo as</p>
+              <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">{user ? `Signed in as ${user.name}` : 'Log in or sign up as'}</p>
               <div className="mt-2.5 grid max-w-xl gap-2 sm:grid-cols-3">
                 {(Object.keys(ROLE_META) as Role[]).map((r) => (
                   <button key={r} onClick={() => enter(sector, r)} className="group rounded-xl bg-white/[0.06] p-3.5 text-left ring-1 ring-white/10 transition hover:bg-white/[0.12] hover:ring-white/25 cursor-pointer">

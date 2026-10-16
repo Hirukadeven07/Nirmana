@@ -19,7 +19,13 @@ npm run build    # type-check + production build
 | Estimator types | House, luxury villa, low-rise apartment | Office, retail, warehouse, boutique hotel |
 | Payments | 8 milestones + 5% retention | 9 milestones + 5% retention |
 
-Switch sides from the sidebar. Switch perspective (**Client / Contractor / Architect**) from the top bar. Each role sees different actions.
+Switch sides from the sidebar. Each role (**Client / Architect / Contractor**) sees different actions, and the role comes from the account you log in with.
+
+## Accounts
+
+The workspace needs a login. On `/signup` you choose to register as a client, architect or contractor; on `/login` you choose the same role and sign in with email and password (an account can only log in under its own role). The signed-in user appears as that party on every project, and their name is used on logs, comments, approvals and the audit trail. Log out from the account menu in the top bar.
+
+For now, accounts are stored in the browser's `localStorage` (`nirmana.v1.users`, with salted SHA-256 password hashes) and the session in `nirmana.v1.session`. This is a stand-in, not real security: `src/store/auth.tsx` is the single place to swap in a backend API.
 
 ## Features
 
