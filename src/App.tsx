@@ -20,6 +20,7 @@ const Budget = lazy(() => import('./pages/project/Budget'))
 const Materials = lazy(() => import('./pages/project/Materials'))
 const Plans = lazy(() => import('./pages/project/Plans'))
 const Tour = lazy(() => import('./pages/project/Tour'))
+const Model = lazy(() => import('./pages/project/Model'))
 const Changes = lazy(() => import('./pages/project/Changes'))
 const Payments = lazy(() => import('./pages/project/Payments'))
 const Ledger = lazy(() => import('./pages/project/Ledger'))
@@ -55,6 +56,7 @@ export default function App() {
                 <Route path="materials" element={<Materials />} />
                 <Route path="plans" element={<Plans />} />
                 <Route path="tour" element={<Tour />} />
+                <Route path="model" element={<Model />} />
                 <Route path="changes" element={<Changes />} />
                 <Route path="payments" element={<Payments />} />
                 <Route path="ledger" element={<Ledger />} />

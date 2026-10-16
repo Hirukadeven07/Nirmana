@@ -75,7 +75,7 @@ export default function Plans() {
             <p className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{g}</p>
             {p.plans.filter((s) => s.discipline === g).map((s) => (
               <button key={s.id} onClick={() => setSelected(s.id)} className={clsx('flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left cursor-pointer', s.id === sheet.id ? 'bg-accent-soft' : 'hover:bg-slate-50')}>
-                <div className="h-10 w-14 shrink-0 overflow-hidden rounded border border-slate-200 bg-white"><Drawing kind={s.drawing} /></div>
+                <div className="h-10 w-14 shrink-0 overflow-hidden rounded border border-slate-200 bg-white"><Drawing kind={s.drawing} project={p} /></div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] font-semibold text-slate-800">{s.code} · {s.title}</p>
                   <div className="mt-0.5 flex items-center gap-1.5"><span className="text-[11px] text-slate-500">Rev {s.rev}</span><Badge tone={STATUS_TONE[s.status]} className="!text-[10px] !px-1">{s.status}</Badge></div>
@@ -114,7 +114,7 @@ export default function Plans() {
           </div>
           <div className="relative overflow-auto bg-slate-100 scroll-thin" style={{ maxHeight: 620 }}>
             <div className={clsx('relative mx-auto origin-top-left bg-white shadow-sm', commenting && 'cursor-crosshair')} style={{ width: `${zoom * 100}%`, aspectRatio: '800 / 540' }} onClick={onCanvasClick}>
-              <Drawing kind={sheet.drawing} />
+              <Drawing kind={sheet.drawing} project={p} />
               {sheet.comments.map((c, i) => (
                 <button key={c.id} onClick={(e) => { e.stopPropagation(); setActivePin(activePin === c.id ? null : c.id) }} className={clsx('absolute z-10 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full rounded-bl-none text-[11px] font-bold text-white shadow-lg ring-2 ring-white cursor-pointer', c.resolved ? 'bg-slate-400' : 'bg-brand !text-slate-900')} style={{ left: `${c.x}%`, top: `${c.y}%` }}>
                   {i + 1}
