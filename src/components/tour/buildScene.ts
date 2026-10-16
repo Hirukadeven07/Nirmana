@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import type { PlanObject, Room, RoomKind, TourLevel, TourModel } from '../../data/floorplans'
+import * as F from './furniture'
+import { makeKit, mergeByMaterial, type Kit } from './furniture'
 
 /*
  * Turns a structured floor plan into a walkable three.js scene.
@@ -18,8 +20,10 @@ export interface RoomInfo {
   h: number
   kind?: RoomKind
   level: number
-  /** Centre of the largest clear floor area, for teleporting. */
+  /** Room centre; the viewer searches outward from here for clear floor. */
   spot: { x: number; y: number }
+  /** Where the room's main furniture sits, and how far back to stand to frame it. */
+  focus?: { x: number; y: number; dist: number }
 }
 
 export interface Stair { x: number; y: number; w: number; h: number; level: number }
@@ -85,21 +89,26 @@ function makeTextures() {
   }
   return {
     wood: canvasTexture((g, s) => {
-      const tones = ['#b98a5a', '#a87a4c', '#c29466', '#9f7246', '#b4865a']
-      for (let r = 0; r < 8; r++) {
-        const y = (r * s) / 8, off = (r % 2) * s * 0.45
-        for (let k = -1; k < 2; k++) {
-          g.fillStyle = tones[(r * 3 + k + 5) % tones.length]
-          g.fillRect(off + k * s * 0.9, y, s * 0.9, s / 8)
-          g.fillStyle = 'rgba(60,35,15,0.45)'
-          g.fillRect(off + k * s * 0.9, y, 1.5, s / 8)
+      const tones = ['#b58a5f', '#ad8257', '#ba9064', '#a87e54', '#b2885b', '#a57b50']
+      const rows = 16, rh = s / rows
+      for (let r = 0; r < rows; r++) {
+        const y = r * rh
+        let x = -(((r * 37) % 100) / 100) * s * 0.6
+        let k = r
+        while (x < s) {
+          const len = s * (0.45 + ((k * 53) % 40) / 100)
+          g.fillStyle = tones[(k * 7 + r) % tones.length]
+          g.fillRect(x, y, len, rh)
+          for (let l = 0; l < 4; l++) {
+            g.strokeStyle = 'rgba(70,45,20,0.07)'
+            g.beginPath(); g.moveTo(x, y + 2 + (l * (rh - 4)) / 3); g.bezierCurveTo(x + len / 3, y + 1 + l * 4, x + len / 2, y + rh - 2, x + len, y + 2 + (l * (rh - 4)) / 3); g.stroke()
+          }
+          g.fillStyle = 'rgba(50,30,12,0.35)'
+          g.fillRect(x, y, 1, rh)
+          x += len; k++
         }
-        g.fillStyle = 'rgba(60,35,15,0.35)'
-        g.fillRect(0, y, s, 1.5)
-        for (let k = 0; k < 6; k++) {
-          g.strokeStyle = 'rgba(80,50,20,0.12)'
-          g.beginPath(); g.moveTo(0, y + 3 + k * 4); g.lineTo(s, y + 4 + k * 4 + Math.random() * 2); g.stroke()
-        }
+        g.fillStyle = 'rgba(50,30,12,0.3)'
+        g.fillRect(0, y, s, 1)
       }
     }),
     tile: canvasTexture((g, s) => {
@@ -175,6 +184,7 @@ function labelSprite(text: string, sub?: string) {
 export function buildScene(model: TourModel): BuiltScene {
   const style = STYLE[model.style]
   const tex = makeTextures()
+  const kit = makeKit()
   const root = new THREE.Group()
   const covers = new THREE.Group()
   const labels = new THREE.Group()
@@ -441,26 +451,25 @@ export function buildScene(model: TourModel): BuiltScene {
     const solidAabb = (x: number, y: number, w: number, d: number) => {
       colliders.push({ x1: x, y1: y, x2: x + w, y2: y }, { x1: x + w, y1: y, x2: x + w, y2: y + d }, { x1: x, y1: y + d, x2: x + w, y2: y + d }, { x1: x, y1: y, x2: x, y2: y + d })
     }
+    const furn = new THREE.Group()
     lv.rooms.forEach((r, ri) => {
-      const placed = furnish(r, doorsBySide.get(ri) ?? [])
-      for (const p of placed) {
-        box(group, p.x, base + (p.z ?? 0), p.y, p.w, p.h, p.d, paint(p.color, p.rough ?? 0.8, p.metal ?? 0))
-        if (p.solid) solidAabb(p.x, p.y, p.w, p.d)
-        if (p.main) stats.furniture++
-      }
-      // spot: centre of the room, nudged away from furniture-heavy back wall
+      const { placed, focus } = furnish(kit, r, doorsBySide.get(ri) ?? [], lv.roomHeights?.[r[4]] ?? lv.height)
       const info = roomInfos.find((i) => i.label === r[4])
-      if (info && placed.length) {
-        const cx = r[0] + r[2] / 2, cy = r[1] + r[3] / 2
-        const blocked = placed.some((p) => p.solid && cx > p.x - 1 && cx < p.x + p.w + 1 && cy > p.y - 1 && cy < p.y + p.d + 1)
-        if (blocked) info.spot = { x: r[0] + Math.min(3, r[2] / 2), y: r[1] + r[3] - Math.min(3, r[3] / 2) }
+      if (info && placed.length) info.focus = focus
+      for (const p of placed) {
+        furn.add(p.obj)
+        if (p.aabb) solidAabb(...p.aabb)
+        if (p.main) stats.furniture++
       }
     })
     for (const o of lv.objects ?? []) {
-      addObject(group, o, base, box, paint)
+      furn.add(objectModel(kit, o))
       if (o.kind !== 'plant') solidAabb(o.x, o.y, o.w, o.d)
       if (o.kind === 'desk' || o.kind === 'rack') stats.furniture++
     }
+    const merged = mergeByMaterial(furn)
+    merged.position.y = base
+    group.add(merged)
 
     root.add(group)
     levels.push({ name: lv.name, base, height: lv.height, group, colliders, rooms: roomInfos, fill: lv.fill })
@@ -530,7 +539,9 @@ export function buildScene(model: TourModel): BuiltScene {
   if (model.style === 'warehouse') {
     for (let i = 0; i < 12; i++) box(site, 14.5 + i * 18.2, 0, D, 12.4, 4, 6, paint('#475569'))
   }
-  for (const o of model.outdoor ?? []) addObject(site, o, 0, box, paint)
+  const outdoor = new THREE.Group()
+  for (const o of model.outdoor ?? []) outdoor.add(objectModel(kit, o))
+  site.add(mergeByMaterial(outdoor))
   root.add(site)
   root.add(covers)
   root.add(labels)
@@ -549,168 +560,238 @@ export function buildScene(model: TourModel): BuiltScene {
       })
       unitBox.dispose()
       Object.values(tex).forEach((t) => t.dispose())
+      kit.dispose()
     },
   }
 }
 
 // ---------------------------------------------------------------------------
-// Furnishing: simple pieces laid against the wall with the fewest doors.
+// Furnishing: models from ./furniture laid out against the wall with the fewest doors.
 
-interface Piece { x: number; y: number; w: number; d: number; h: number; z?: number; color: string; rough?: number; metal?: number; solid?: boolean; main?: boolean }
+interface Placed { obj: THREE.Object3D; aabb?: [number, number, number, number]; main?: boolean }
 
-function furnish(r: Room, doors: { side: Side; a: number; b: number }[]): Piece[] {
+const PALETTE = {
+  covers: ['#e9e4da', '#9fb4c7', '#c8b6a6', '#a8b89a', '#d9c7a7'],
+  heads: ['#6b7280', '#8a7a68', '#4b5563', '#7c6f64'],
+  sofas: ['#7d8590', '#a39382', '#5f6b5c', '#8b8f96'],
+}
+const pick = <T,>(list: T[], key: string) => list[[...key].reduce((h, c) => h + c.charCodeAt(0), 0) % list.length]
+
+/** Wraps a model so it can be positioned and rotated about its footprint centre. */
+function centred(obj: THREE.Object3D, w: number, d: number) {
+  const g = new THREE.Group()
+  obj.position.set(-w / 2, 0, -d / 2)
+  g.add(obj)
+  return g
+}
+
+function furnish(k: Kit, r: Room, doors: { side: Side; a: number; b: number }[], ceil: number): { placed: Placed[]; focus?: RoomInfo['focus'] } {
   const [rx, ry, rw, rh, label, kind] = r
   const name = label.toLowerCase()
-  if (kind === 'stair' || kind === 'core') return []
+  if (kind === 'stair' || kind === 'core') return { placed: [] }
   const sides: Side[] = ['N', 'S', 'W', 'E']
   const sideLen = (s: Side) => (s === 'N' || s === 'S' ? rw : rh)
   const doorLen = (s: Side) => doors.filter((d) => d.side === s).reduce((t, d) => t + (d.b - d.a), 0)
   const back = [...sides].sort((p, q) => doorLen(p) - doorLen(q) || sideLen(q) - sideLen(p))[0]
   const front = ({ N: 'S', S: 'N', W: 'E', E: 'W' } as const)[back]
+  const endSide = ({ N: 'E', S: 'W', W: 'N', E: 'S' } as const)[back]
   const L = sideLen(back), Dp = back === 'N' || back === 'S' ? rh : rw
-  // Local frame: u along the back wall (0..L), v inward from it (0..Dp).
-  const toPlan = (u: number, v: number, w: number, d: number): { x: number; y: number; w: number; d: number } => {
+
+  // Wall frame: u runs along the back wall, v into the room. Models face +v.
+  const fr = { N: { ox: rx, oy: ry, rot: 0 }, S: { ox: rx + rw, oy: ry + rh, rot: Math.PI }, W: { ox: rx, oy: ry + rh, rot: Math.PI / 2 }, E: { ox: rx + rw, oy: ry, rot: -Math.PI / 2 } }[back]
+  const U = [Math.cos(fr.rot), -Math.sin(fr.rot)], V = [Math.sin(fr.rot), Math.cos(fr.rot)]
+  const P = (u: number, v: number) => [fr.ox + u * U[0] + v * V[0], fr.oy + u * U[1] + v * V[1]] as const
+  const box2 = (u: number, v: number, w: number, d: number): Placed['aabb'] => {
+    const [x1, y1] = P(u, v), [x2, y2] = P(u + w, v + d)
+    return [Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)]
+  }
+  const out: Placed[] = []
+  /** Place a model with its back-left corner at (u, v) of the back wall. */
+  const put = (obj: THREE.Object3D, u: number, v: number, w?: number, d?: number, main = false) => {
+    const [x, y] = P(u, v)
+    obj.position.set(x, 0, y)
+    obj.rotation.y = fr.rot
+    out.push({ obj, aabb: w && d ? box2(u, v, w, d) : undefined, main })
+  }
+  /** Place a model against the front wall, facing back into the room. */
+  const putFront = (obj: THREE.Object3D, u: number, w: number, d: number) => {
+    const [x, y] = P(u + w, Dp)
+    obj.position.set(x, 0, y)
+    obj.rotation.y = fr.rot + Math.PI
+    out.push({ obj, aabb: box2(u, Dp - d, w, d) })
+  }
+  /** Place a model by its centre in plan coordinates. */
+  const putAt = (obj: THREE.Object3D, w: number, d: number, cx: number, cy: number, rot: number, solid = false, main = false) => {
+    const c = centred(obj, w, d)
+    c.position.set(cx, 0, cy)
+    c.rotation.y = rot
+    const turned = Math.abs(Math.sin(rot)) > 0.5
+    out.push({ obj: c, aabb: solid ? (turned ? [cx - d / 2, cy - w / 2, d, w] : [cx - w / 2, cy - d / 2, w, d]) : undefined, main })
+  }
+  const toU = (d: { a: number; b: number }) => {
     switch (back) {
-      case 'N': return { x: rx + u, y: ry + v, w, d }
-      case 'S': return { x: rx + u, y: ry + rh - v - d, w, d }
-      case 'W': return { x: rx + v, y: ry + u, w: d, d: w }
-      case 'E': return { x: rx + rw - v - d, y: ry + u, w: d, d: w }
+      case 'N': return [d.a - rx, d.b - rx]
+      case 'S': return [rx + rw - d.b, rx + rw - d.a]
+      case 'W': return [ry + rh - d.b, ry + rh - d.a]
+      case 'E': return [d.a - ry, d.b - ry]
     }
   }
-  // Shift a centred item along the wall so it does not sit in front of a door on the back wall.
-  const backDoors = doors.filter((d) => d.side === back).map((d) => (back === 'N' || back === 'S' ? [d.a - rx, d.b - rx] : [d.a - ry, d.b - ry]))
+  const backDoors = doors.filter((d) => d.side === back).map(toU)
+  /** Start position along the back wall for a centred item of width w that avoids doors. */
   const slot = (w: number) => {
     let u = (L - w) / 2
     for (const [a, b] of backDoors) if (u < b + 0.5 && u + w > a - 0.5) u = a - 0.5 - w >= 0.4 ? a - 0.5 - w : b + 0.5
-    return Math.min(Math.max(u, 0.4), Math.max(0.4, L - w - 0.4))
+    return Math.min(Math.max(u, 0.3), Math.max(0.3, L - w - 0.3))
   }
-  const out: Piece[] = []
-  const put = (u: number, v: number, w: number, d: number, h: number, color: string, extra: Partial<Piece> = {}) => out.push({ ...toPlan(u, v, w, d), h, color, ...extra })
 
   if (name.includes('bed')) {
     const u = slot(5.2)
-    put(u, 0.3, 5.2, 6.8, 1.4, '#e8e2d6', { solid: true, main: true })
-    put(u, 0.3, 5.2, 0.4, 3.6, '#6b4a2f')
-    put(u + 0.4, 0.8, 2, 1.3, 0.5, '#ffffff', { z: 1.4 })
-    put(u + 2.8, 0.8, 2, 1.3, 0.5, '#ffffff', { z: 1.4 })
-    put(u, 3.2, 5.2, 3.9, 0.15, '#5b7fa6', { z: 1.4 })
-    if (u > 2) put(u - 1.9, 0.3, 1.6, 1.6, 1.8, '#8a6440')
-    if (u + 5.2 + 2 < L) put(u + 5.5, 0.3, 1.6, 1.6, 1.8, '#8a6440')
+    put(F.rug(k, 7.2, 6), u - 1, 2.6)
+    put(F.bed(k, 5.2, 7, pick(PALETTE.covers, label), pick(PALETTE.heads, label)), u, 0.05, 5.2, 7, true)
+    if (u > 2.1) put(F.nightstand(k), u - 1.95, 0.1, 1.7, 1.5)
+    if (u + 7.3 < L) put(F.nightstand(k), u + 5.45, 0.1, 1.7, 1.5)
+    if (Dp > 12 && doorLen(front) === 0 && L > 8) putFront(F.wardrobe(k, Math.min(8, L - 2)), (L - Math.min(8, L - 2)) / 2, Math.min(8, L - 2), 2)
+    else if (u + 9.2 < L) put(F.plant(k, 4.2, 'tall'), L - 1.7, 0.2)
   } else if (name.includes('living') || name.includes('lounge')) {
-    const u = slot(7.5)
-    put(u, 0.4, 7.5, 3, 1.4, '#55606e', { solid: true, main: true })
-    put(u, 0.4, 7.5, 1, 2.8, '#4a5562')
-    put(u + 1.5, 5, 4.5, 2.4, 1.3, '#7a5534', { solid: true })
-    put(u - 1, 3.8, 9.5, 6, 0.04, '#c9b79c', { rough: 1 })
-    if (Dp > 13 && doorLen(front) === 0) {
-      put(u + 0.5, Dp - 1.6, 6.5, 1.2, 1.8, '#2f3338', { solid: true })
-      put(u + 1.2, Dp - 1.2, 5, 0.2, 2.8, '#0f1115', { z: 2.2, metal: 0.3 })
-    }
+    const sw = Math.min(7.5, L - 2), u = slot(sw)
+    put(F.rug(k, sw + 2.4, 6.4), u - 1.2, 2.4)
+    put(F.sofa(k, sw, 3.2, pick(PALETTE.sofas, label), ['#c2410c', '#e7e5e4']), u, 0.1, sw, 3.2, true)
+    put(F.coffeeTable(k), u + sw / 2 - 2.2, 4.6, 4.4, 2.4)
+    if (Dp > 12 && doorLen(front) === 0) putFront(F.tvUnit(k, 6.5), u + sw / 2 - 3.25, 6.5, 1.4)
+    if (u > 2) put(F.plant(k, 4.8, 'tall'), 0.3, 0.2)
+    else if (u + sw + 1.8 < L) put(F.plant(k, 4.8, 'tall'), L - 1.7, 0.2)
   } else if (name.includes('dining')) {
-    const tw = Math.min(6, rw - 5), td = 3.4
-    const cx = rw / 2 - tw / 2, cy = rh / 2 - td / 2
-    out.push({ x: rx + cx, y: ry + cy, w: tw, d: td, h: 2.5, color: '#7a5534', solid: true, main: true })
-    for (let i = 0; i < 3; i++) for (const s of [-1, 1]) {
-      const px = rx + cx + 0.4 + i * ((tw - 2) / 2), py = s < 0 ? ry + cy - 1.6 : ry + cy + td + 0.2
-      out.push({ x: px, y: py, w: 1.4, d: 1.4, h: 1.5, color: '#5b3d24' })
-      out.push({ x: px, y: s < 0 ? py : py + 1.2, w: 1.4, d: 0.2, h: 3, color: '#5b3d24' })
+    const tw = Math.min(6.2, rw - 5), td = 3.4
+    const cx = rx + rw / 2, cy = ry + rh / 2
+    putAt(F.diningTable(k, tw, td, ceil), tw, td, cx, cy, 0, true, true)
+    for (let i = 0; i < 3; i++) {
+      const x = cx - tw / 2 + 0.45 + i * ((tw - 2.4) / 2) + 0.75
+      putAt(F.diningChair(k, '#d6cbb8'), 1.5, 1.5, x, cy - td / 2 - 0.35, 0)
+      putAt(F.diningChair(k, '#d6cbb8'), 1.5, 1.5, x, cy + td / 2 + 0.35, Math.PI)
     }
+    put(F.plant(k, 4.5, 'bush'), 0.3, 0.3)
   } else if (name.includes('pantry') || name.includes('kitchen')) {
-    put(0.3, 0.3, L - 0.6, 2.2, 3, '#f1f5f9', { solid: true, main: true })
-    put(0.3, 0.3, L - 0.6, 2.3, 0.15, '#334155', { z: 3 })
-    put(0.3, 0.3, L - 0.6, 1.2, 2.2, '#cbd5e1', { z: 5.2 })
-    if (Dp > 9) put(L / 2 - 3, Dp / 2, 6, 2.6, 3, '#e2e8f0', { solid: true })
+    const fridge = L > 12
+    put(F.kitchen(k, L - 0.2, fridge), 0.1, 0, L - 0.2, 2.35, true)
+    if (Dp > 9 && L > 9) { const iw = Math.min(6, L - 5); put(F.island(k, iw), (L - iw) / 2, Dp / 2 - 0.6, iw, 3.6) }
   } else if (name.includes('bath')) {
-    const u = slot(5)
-    put(u, 0.3, 1.6, 2.2, 1.4, '#ffffff', { solid: true, main: true })
-    put(u, 0.3, 1.6, 0.6, 2.6, '#ffffff')
-    put(u + 2.6, 0.3, 2, 1.6, 2.8, '#f8fafc', { solid: true })
-    put(u + 2.7, 0.3, 1.8, 0.1, 2, '#bfdbfe', { z: 3.4, metal: 0.8, rough: 0.1 })
-  } else if (name.includes('walk-in') || name.includes('store')) {
-    put(0.3, 0.3, L - 0.6, 1.8, 7, '#a07850', { solid: true, main: true })
+    const u = slot(5.4)
+    put(F.vanity(k, 3), u, 0, 3, 1.8, true)
+    put(F.toilet(k), u + 3.5, 0, 1.8, 2.4)
+    if (Dp >= 7 && doorLen(front) === 0 && doorLen(endSide) === 0) putFront(F.shower(k, 3.4, 3.4), 0, 3.4, 3.4)
+  } else if (name.includes('walk-in')) {
+    put(F.wardrobe(k, L - 0.6), 0.3, 0.05, L - 0.6, 2, true)
+  } else if (name.includes('store')) {
+    put(F.shelving(k, L - 0.6), 0.3, 0.1, L - 0.6, 1.5, true)
   } else if (name.includes('study')) {
-    const u = slot(4)
-    put(u, 0.3, 4, 2, 2.5, '#8a6440', { solid: true, main: true })
-    put(u + 1.4, 2.6, 1.4, 1.4, 1.6, '#334155')
+    const u = slot(4.5)
+    put(F.desk(k, 4.5, 2.2, 1), u, 0.1, 4.5, 2.2, true)
+    const [cx, cy] = P(u + 2.25, 3.3)
+    putAt(F.officeChair(k, '#334155'), 1.6, 1.6, cx, cy, fr.rot + Math.PI)
+    if (doorLen(front) === 0) putFront(F.bookshelf(k, Math.min(4, L - 1)), 0.5, Math.min(4, L - 1), 1.1)
   } else if (name.includes('car porch')) {
-    const cx = rx + 1.5, cy = ry + rh / 2 - 6.5
-    out.push({ x: cx, y: cy, w: 5.8, d: 13, h: 2.6, z: 0.6, color: '#b91c1c', rough: 0.3, metal: 0.4, solid: true, main: true })
-    out.push({ x: cx + 0.4, y: cy + 3.5, w: 5, d: 6, h: 1.6, z: 3.2, color: '#1f2937', rough: 0.15, metal: 0.6 })
-    for (const [dx, dy] of [[-0.2, 2], [5.4, 2], [-0.2, 10], [5.4, 10]]) out.push({ x: cx + dx, y: cy + dy, w: 0.6, d: 2.2, h: 2.2, color: '#111827' })
+    put(F.car(k), 1.5, (Dp - 13.6) / 2, 6, 13.6, true)
   } else if (kind === 'dashed') {
-    put(1, 1, 2, 2, 2.6, '#7c5a3a')
-    put(4, 1, 2, 2, 2.6, '#7c5a3a')
-    put(L - 2.5, 0.6, 1.8, 1.8, 3.4, '#3f7d3a')
+    put(F.loungeChair(k, '#e7dcc6'), 0.8, 0.4, 2.4, 2.6, true)
+    put(F.sideTable(k), 3.5, 0.9, 1.6, 1.6)
+    put(F.loungeChair(k, '#e7dcc6'), 5.4, 0.4, 2.4, 2.6, true)
+    put(F.plant(k, 4, 'tall'), L - 1.8, 0.3)
   } else if (name.includes('meeting')) {
-    const tw = rw - 6, td = 4
-    out.push({ x: rx + 3, y: ry + rh / 2 - td / 2, w: tw, d: td, h: 2.5, color: '#e5e7eb', solid: true, main: true })
-    for (let i = 0; i < 3; i++) for (const s of [-1, 1]) out.push({ x: rx + 3.5 + i * ((tw - 2) / 2), y: s < 0 ? ry + rh / 2 - td / 2 - 1.8 : ry + rh / 2 + td / 2 + 0.4, w: 1.5, d: 1.5, h: 2.6, color: '#1f2937' })
-    out.push({ x: rx + rw / 2 - 2.5, y: ry + 0.3, w: 5, d: 0.2, h: 3, z: 3, color: '#0f172a', metal: 0.3 })
+    const tw = rw - 6, td = 4.2, cx = rx + rw / 2, cy = ry + rh / 2
+    putAt(F.meetingTable(k, tw, td), tw, td, cx, cy, 0, true, true)
+    for (let i = 0; i < 3; i++) {
+      const x = cx - tw / 2 + 1 + i * ((tw - 2) / 2)
+      putAt(F.officeChair(k), 1.6, 1.6, x, cy - td / 2 - 0.6, 0)
+      putAt(F.officeChair(k), 1.6, 1.6, x, cy + td / 2 + 0.6, Math.PI)
+    }
+    const screen = new THREE.Group()
+    k.rbox(screen, 0, 3, 0.05, 5, 2.8, 0.12, k.m.blackGlass, 0.03)
+    k.box(screen, 0.08, 3.08, 0.175, 4.84, 2.64, 0.01, k.m.screen)
+    put(screen, L / 2 - 2.5, 0)
   } else if (name.includes('office')) {
-    for (let i = 0; i < 3; i++) put(1 + i * 7, 0.4, 5, 2.5, 2.5, '#d6d3d1', { solid: true, main: true })
-    put(L - 4, Dp - 3, 3, 2, 4.5, '#64748b', { solid: true })
+    for (let i = 0; i * 7 + 6 < L; i++) {
+      put(F.desk(k, 5.5, 2.5, 1), 0.8 + i * 7, 0.2, 5.5, 2.5, true)
+      const [cx, cy] = P(0.8 + i * 7 + 2.75, 3.6)
+      putAt(F.officeChair(k), 1.6, 1.6, cx, cy, fr.rot + Math.PI)
+    }
+    putFront(F.shelving(k, 6), 1, 6, 1.5)
+    put(F.plant(k, 4.5, 'tall'), L - 1.8, Dp - 2)
   } else if (name.includes('lobby') || name.includes('landing')) {
-    put(0.5, 0.5, 1.6, 1.6, 3.5, '#3f7d3a')
+    put(F.plant(k, 4.4, 'tall'), 0.4, 0.4)
   }
-  return out
+  const centredRoom = name.includes('dining') || name.includes('meeting') || name.includes('car porch')
+  const [fx, fy] = centredRoom ? [rx + rw / 2, ry + rh / 2] : P(L / 2, 1.5)
+  return { placed: out, focus: { x: fx, y: fy, dist: centredRoom ? Math.hypot(rw, rh) * 0.38 : Math.min(Dp * 0.78, 13) } }
 }
 
-function addObject(
-  parent: THREE.Object3D, o: PlanObject, base: number,
-  box: (p: THREE.Object3D, x: number, y: number, z: number, w: number, h: number, d: number, m: THREE.Material, s?: boolean) => THREE.Mesh,
-  paint: (c: string, r?: number, m?: number) => THREE.Material,
-) {
+/** Free-standing plan objects: office benching, racking, columns, lifts, planting. */
+function objectModel(k: Kit, o: PlanObject): THREE.Object3D {
   const { x, y, w, d, h } = o
+  const g = new THREE.Group()
+  g.position.set(x, 0, y)
+  const { m } = k
   switch (o.kind) {
     case 'column':
-      box(parent, x, base, y, w, h, d, paint('#d1d5db', 0.9))
+      k.box(g, 0, 0, 0, w, h, d, m.paint('#e5e7eb', 0.8))
       break
-    case 'desk':
-      box(parent, x, base + h - 0.15, y, w, 0.15, d, paint('#f5f5f4', 0.6))
-      box(parent, x + 0.2, base, y + 0.2, 0.2, h - 0.15, d - 0.4, paint('#475569', 0.5, 0.5))
-      box(parent, x + w - 0.4, base, y + 0.2, 0.2, h - 0.15, d - 0.4, paint('#475569', 0.5, 0.5))
-      box(parent, x, base + h, y + d / 2 - 0.05, w, 1.4, 0.1, paint('#94a3b8', 0.9))
-      for (const off of [0.8, w / 2 + 0.6]) {
-        box(parent, x + off, base + h, y + 0.6, 1.8, 1.1, 0.12, paint('#0f172a', 0.3, 0.3))
-        box(parent, x + off + 0.2, base, y - 1.6, 1.4, 1.6, 1.4, paint('#1f2937', 0.8))
-        box(parent, x + off + 0.2, base + 1.6, y - 1.7, 1.4, 1.6, 0.2, paint('#1f2937', 0.8))
-        box(parent, x + off + 0.2, base + h, y + d - 1.4, 1.4, 1.1, 0.12, paint('#0f172a', 0.3, 0.3))
-        box(parent, x + off + 0.2, base, y + d + 0.2, 1.4, 1.6, 1.4, paint('#1f2937', 0.8))
+    case 'desk': {
+      // two-sided benching desk with a fabric divider
+      k.rbox(g, 0, 2.38, 0, w, 0.1, d, m.paint('#f1efe9', 0.4), 0.03)
+      for (const lx of [0.15, w - 0.25]) k.box(g, lx, 0, 0.2, 0.1, 2.38, d - 0.4, m.metal('#4b5563', 0.4))
+      k.rbox(g, 0.1, 2.48, d / 2 - 0.06, w - 0.2, 1.3, 0.12, m.fabric('#64748b'), 0.05)
+      for (const side of [0, 1]) for (const off of [w * 0.25, w * 0.75]) {
+        const z = side ? d - 0.75 : 0.75, dir = side ? 1 : -1
+        k.cyl(g, off, 2.48, z - dir * 0.15, 0.3, 0.32, 0.04, m.metal('#374151', 0.3))
+        k.box(g, off - 0.05, 2.5, z - dir * 0.18 - 0.03, 0.1, 0.8, 0.06, m.metal('#9ca3af', 0.3))
+        k.rbox(g, off - 0.9, 2.95, z - dir * 0.12 - 0.04, 1.8, 1.05, 0.08, m.blackGlass, 0.03)
+        k.box(g, off - 0.85, 3.0, z - dir * 0.12 + dir * 0.045 - 0.0025, 1.7, 0.95, 0.005, m.screen)
+        k.rbox(g, off - 0.55, 2.48, side ? z - 0.75 : z + 0.35, 1.1, 0.05, 0.38, m.paint('#e5e7eb', 0.5), 0.02)
+        const chair = centred(F.officeChair(k, '#273142'), 1.6, 1.6)
+        chair.position.set(off, 0, side ? d + 1.1 : -1.1)
+        chair.rotation.y = side ? Math.PI : 0
+        g.add(chair)
       }
       break
+    }
     case 'rack': {
-      const orange = paint('#ea580c', 0.5, 0.4), blue = paint('#1d4ed8', 0.5, 0.4)
-      for (let k = 0; k <= d; k += 8.5) box(parent, x, base, y + Math.min(k, d - 0.3), w, h, 0.3, blue)
+      const blue = m.paint('#1d4ed8', 0.45), orange = m.paint('#ea580c', 0.45)
+      for (let kz = 0; kz <= d; kz += 8.5) {
+        const z = Math.min(kz, d - 0.3)
+        k.box(g, 0, 0, z, 0.25, h, 0.25, blue)
+        k.box(g, w - 0.25, 0, z, 0.25, h, 0.25, blue)
+        for (let yy = 1.5; yy < h; yy += 3) k.box(g, 0.25, yy, z + 0.08, w - 0.5, 0.08, 0.08, blue)
+      }
+      const rnd = mulberry(Math.round(x * 31))
       for (let lvl = 0; lvl < 4; lvl++) {
-        const z = base + 1 + lvl * 6
-        box(parent, x, z, y, 0.3, 0.4, d, orange)
-        box(parent, x + w - 0.3, z, y, 0.3, 0.4, d, orange)
-        const rnd = mulberry(Math.round(x * 31 + lvl))
-        for (let k = 0; k < d - 4; k += 4.25) if (rnd() > 0.18) {
-          box(parent, x + 0.4, z + 0.4, y + k + 0.4, w - 0.8, 0.4, 3.4, paint('#c8a26b', 0.9))
-          box(parent, x + 0.5, z + 0.8, y + k + 0.5, w - 1, 2.6 + rnd() * 1.6, 3.2, paint(['#d6b98c', '#c2a275', '#e7d3b0', '#94a3b8'][Math.floor(rnd() * 4)], 0.95))
+        const z0 = 0.3 + lvl * 6
+        k.box(g, 0, z0, 0, 0.3, 0.45, d, orange)
+        k.box(g, w - 0.3, z0, 0, 0.3, 0.45, d, orange)
+        for (let kz = 0.2; kz < d - 3.6; kz += 4.25) if (rnd() > 0.15) {
+          k.box(g, 0.35, z0 + 0.45, kz, w - 0.7, 0.4, 3.6, m.wood('#c8a26b'))
+          const bh = 2.4 + rnd() * 2
+          k.rbox(g, 0.45, z0 + 0.85, kz + 0.1, w - 0.9, bh, 3.4, m.paint(['#d6b98c', '#c2a275', '#e7d3b0', '#cbd5e1'][Math.floor(rnd() * 4)], 0.95), 0.05)
+          k.box(g, 0.44, z0 + 0.85 + bh * 0.5, kz + 0.1, w - 0.88, 0.25, 3.42, m.paint('#a8865c', 0.9))
         }
       }
       break
     }
     case 'lift':
-      box(parent, x, base, y, w, h, d, paint('#cbd5e1', 0.25, 0.9))
-      box(parent, x + w / 2 - 0.03, base, y - 0.02, 0.06, h, d + 0.04, paint('#475569', 0.4, 0.6))
-      box(parent, x - 0.3, base + h, y - 0.05, w + 0.6, 0.6, d + 0.1, paint('#334155', 0.4, 0.4))
+      k.box(g, 0, 0, 0, w, h, d, m.metal('#cbd5e1', 0.25))
+      k.box(g, w / 2 - 0.03, 0, -0.02, 0.06, h, d + 0.04, m.metal('#475569', 0.4))
+      k.box(g, -0.4, h, -0.05, w + 0.8, 0.6, d + 0.1, m.paint('#334155', 0.4))
+      k.box(g, w + 0.3, 3.8, -0.06, 0.25, 0.5, 0.06, m.bulb)
       break
     case 'plant':
-      box(parent, x, base, y, w, 1.4, d, paint('#78716c', 0.9))
-      box(parent, x - 0.3, base + 1.4, y - 0.3, w + 0.6, h - 1.4, d + 0.6, paint('#3f7d3a', 1))
+      g.add(F.plant(k, h + 1, 'bush'))
       break
     case 'tree': {
-      box(parent, x + w / 2 - 0.5, base, y + d / 2 - 0.5, 1, h * 0.45, 1, paint('#6b4a2f', 1))
-      const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(w * 1.6, 0), paint('#4d7c3a', 1))
-      leaf.position.set(x + w / 2, base + h * 0.7, y + d / 2)
-      leaf.castShadow = true
-      parent.add(leaf)
+      const t = F.tree(k, h)
+      t.position.set(w / 2, 0, d / 2)
+      g.add(t)
       break
     }
   }
+  return g
 }
 
 function mulberry(seed: number) {
