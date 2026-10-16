@@ -11,6 +11,7 @@ const Approvals = lazy(() => import('./pages/Approvals'))
 const Market = lazy(() => import('./pages/Market'))
 const Estimator = lazy(() => import('./pages/Estimator'))
 const Calculators = lazy(() => import('./pages/Calculators'))
+const HouseModel = lazy(() => import('./pages/HouseModel'))
 const ProjectLayout = lazy(() => import('./pages/project/ProjectLayout'))
 const Overview = lazy(() => import('./pages/project/Overview'))
 const Schedule = lazy(() => import('./pages/project/Schedule'))
@@ -62,6 +63,7 @@ export default function App() {
               <Route path="market" element={<Market />} />
               <Route path="estimator" element={<Estimator />} />
               <Route path="calculators" element={<Calculators />} />
+              <Route path="model" element={<HouseModel />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

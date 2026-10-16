@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import {
-  Bell, Building2, Calculator, CheckCircle2, ChevronDown, ClipboardCheck, FolderKanban, Home, Info, LayoutDashboard, LineChart, LogOut, MapPin, Menu, RotateCcw, Ruler, X,
+  Bell, Box, Building2, Calculator, CheckCircle2, ChevronDown, ClipboardCheck, FolderKanban, Home, Info, LayoutDashboard, LineChart, LogOut, MapPin, Menu, RotateCcw, Ruler, X,
 } from 'lucide-react'
 import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -134,6 +134,7 @@ export function AppLayout() {
     { to: `${base}/market`, label: 'Market prices', icon: LineChart, live: true },
     { to: `${base}/estimator`, label: 'Cost estimator', icon: Calculator },
     { to: `${base}/calculators`, label: 'Material calculators', icon: Ruler },
+    { to: `${base}/model`, label: '3D house model', icon: Box },
   ]
 
   const sidebar = (
