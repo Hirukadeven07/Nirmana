@@ -1,8 +1,10 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppLayout } from './components/Layout'
+import { AuthProvider, useAuth } from './store/auth'
 import { AppProvider, PriceProvider } from './store/store'
 import Landing from './pages/Landing'
+import Auth from './pages/Auth'
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Projects = lazy(() => import('./pages/Projects'))
 const Approvals = lazy(() => import('./pages/Approvals'))
@@ -21,15 +23,26 @@ const Changes = lazy(() => import('./pages/project/Changes'))
 const Payments = lazy(() => import('./pages/project/Payments'))
 const Ledger = lazy(() => import('./pages/project/Ledger'))
 
+/** Sends signed-out visitors to the login page and back here afterwards. */
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  const location = useLocation()
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  return children
+}
+
 export default function App() {
   return (
     <PriceProvider>
+      <AuthProvider>
       <AppProvider>
         <BrowserRouter>
           <Suspense fallback={<div className="grid h-full place-items-center text-sm text-slate-400">Loading…</div>}>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/:sector" element={<AppLayout />}>
+            <Route path="/login" element={<Auth key="login" mode="login" />} />
+            <Route path="/signup" element={<Auth key="signup" mode="signup" />} />
+            <Route path="/:sector" element={<RequireAuth><AppLayout /></RequireAuth>}>
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="projects" element={<Projects />} />
@@ -55,6 +68,7 @@ export default function App() {
           </Suspense>
         </BrowserRouter>
       </AppProvider>
+      </AuthProvider>
     </PriceProvider>
   )
 }
